@@ -1,0 +1,80 @@
+version: '3.8'
+
+services:
+  # ==========================================
+  # BACKEND SERVICE (FastAPI + Vision Models)
+  # ==========================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: manga-translator-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - HOST=0.0.0.0
+      - OLLAMA_URL=http://host.docker.internal:11434
+      - OCR_MODEL=glm-ocr
+      - BYOK_API_KEY=${BYOK_API_KEY:-your_api_key_here}
+      - BYOK_API_BASE=${BYOK_API_BASE:-https://api.openai.com/v1}
+      - BYOK_MODEL=${BYOK_MODEL:-gpt-4o}
+      - PAGE_CONTEXT_TRANSLATION=true
+    volumes:
+      # Persist uploaded comic pages and rendered translations across container lifecycles
+      - manga_uploads:/app/uploads
+      # Cache downloaded model weights (YOLO, SAM 2, HuggingFace) to save gigabytes of bandwidth
+      - manga_model_cache:/home/appuser/.cache
+    extra_hosts:
+      # Allow backend to communicate with Ollama or local LLMs running natively on the host
+      - "host.docker.internal:host-gateway"
+    networks:
+      - manga-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ==========================================
+  # FRONTEND SERVICE (Next.js + Bun)
+  # ==========================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Build-time API base URL. Replace with your server's domain/IP in production.
+        - NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+    container_name: manga-translator-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - manga-net
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+# Custom networks for service isolation
+networks:
+  manga-net:
+    driver: bridge
+
+# Named volumes for state persistence
+volumes:
+  manga_uploads:
+    driver: local
+  manga_model_cache:
+    driver: local

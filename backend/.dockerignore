@@ -1,0 +1,25 @@
+# Python files
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+venv/
+env/
+.env
+
+# Model weights
+*.pt
+backend/*.pt
+
+# Uploads and temporary data
+uploads/
+backend/uploads/
+tmp/
+temp/
+
+# IDE files
+.vscode/
+.idea/
+.git/
+.gitignore

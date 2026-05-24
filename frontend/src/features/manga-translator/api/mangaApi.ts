@@ -50,7 +50,7 @@ export const mangaApi = {
       originalUrl: originalUrl ?? "",
       result_url: resolveUrl(data.result_url),
       inpainted_url: resolveUrl(data.inpainted_url),
-      status: data.status === "processing" ? "segmenting" : data.status,
+      status: (data.status as any) === "processing" ? "segmenting" : data.status,
     };
   },
 
