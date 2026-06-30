@@ -75,6 +75,82 @@ class ApiResponseModelTests(unittest.TestCase):
         self.assertNotIn("translated_text", body)
         self.assertNotIn("inpainted_url", body)
 
+    def test_status_response_includes_blocks_when_present(self) -> None:
+        main.jobs_db["job-2"] = {
+            "id": "job-2",
+            "filename": "source.png",
+            "status": "awaiting_review",
+            "progress": 55,
+            "message": "Awaiting manual review of translations.",
+            "original_url": "/uploads/source.png",
+            "blocks": [
+                {
+                    "id": "block-1",
+                    "box": [10, 20, 100, 50],
+                    "text": "Japanese",
+                    "translated_text": "Thai Translation draft"
+                }
+            ]
+        }
+
+        response = self.client.get("/api/status/job-2")
+        self.assertEqual(response.status_code, 200)
+
+        body = response.json()
+        self.assertEqual(body["id"], "job-2")
+        self.assertEqual(body["status"], "awaiting_review")
+        self.assertEqual(len(body["blocks"]), 1)
+        self.assertEqual(body["blocks"][0]["id"], "block-1")
+        self.assertEqual(body["blocks"][0]["box"], [10, 20, 100, 50])
+        self.assertEqual(body["blocks"][0]["text"], "Japanese")
+        self.assertEqual(body["blocks"][0]["translated_text"], "Thai Translation draft")
+
+    def test_approve_job_updates_translations_and_resumes(self) -> None:
+        from synthesis.segmentation import TextBlock
+        mock_block = TextBlock(
+            id="block-1",
+            box=(10, 20, 100, 50),
+            confidence=1.0,
+            text="Japanese",
+            translated_text="Thai Draft"
+        )
+        
+        main.jobs_db["job-3"] = {
+            "id": "job-3",
+            "filename": "source.png",
+            "status": "awaiting_review",
+            "progress": 55,
+            "message": "Awaiting manual review of translations.",
+            "original_url": "/uploads/source.png",
+            "blocks_obj": [mock_block],
+            "blocks": [
+                {
+                    "id": "block-1",
+                    "box": [10, 20, 100, 50],
+                    "text": "Japanese",
+                    "translated_text": "Thai Draft"
+                }
+            ]
+        }
+
+        payload = {
+            "translations": {
+                "block-1": "Approved Premium Thai Text"
+            }
+        }
+        
+        response = self.client.post("/api/jobs/job-3/approve", json=payload)
+        self.assertEqual(response.status_code, 200)
+        
+        body = response.json()
+        self.assertEqual(body["status"], "resumed")
+        
+        job = main.jobs_db["job-3"]
+        self.assertIn(job["status"], ["inpainting", "completed"])
+        self.assertIn(job["progress"], [60, 100])
+        self.assertEqual(job["blocks"][0]["translated_text"], "Approved Premium Thai Text")
+        self.assertEqual(job["blocks_obj"][0].translated_text, "Approved Premium Thai Text")
+
 
 if __name__ == "__main__":
     unittest.main()

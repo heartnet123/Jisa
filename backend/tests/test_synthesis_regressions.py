@@ -9,6 +9,12 @@ from job_errors import clean_ocr_error_detail, ocr_failure_message
 
 
 class TypesettingRegressionTests(unittest.TestCase):
+    def test_default_typesetting_font_prefers_itim(self) -> None:
+        engine = TypesettingEngine()
+
+        self.assertIsNotNone(engine.font_path)
+        self.assertTrue(str(engine.font_path).endswith("Itim-Regular.ttf"))
+
     def test_fit_text_layout_never_returns_vertical_overflow(self) -> None:
         engine = TypesettingEngine()
         text = "ฉันไม่ได้โกรธนะ แต่เรื่องนี้มันต้องคุยกันดี ๆ ก่อนจริง ๆ"
@@ -57,6 +63,46 @@ class InpaintingRegressionTests(unittest.TestCase):
         self.assertGreater(int(text_mask.sum()), 0)
         self.assertEqual(text_mask.shape, bubble_mask.shape)
         self.assertEqual(int(text_mask[0:10, 0:10].sum()), 0)
+
+    def test_extract_text_mask_keeps_small_punctuation_inside_bubble(self) -> None:
+        image = np.full((80, 80, 3), 255, dtype=np.uint8)
+        bubble_mask = np.zeros((80, 80), dtype=np.uint8)
+        cv2.rectangle(bubble_mask, (10, 10), (70, 70), 1, thickness=-1)
+
+        image[38:40, 40:42] = (0, 0, 0)
+
+        text_mask = InpaintingEngine._extract_text_mask(image, bubble_mask)
+
+        self.assertGreater(int(text_mask[37:41, 39:43].sum()), 0)
+
+    def test_composite_inpainted_preserves_unmasked_model_noise(self) -> None:
+        original = np.full((40, 40, 3), 100, dtype=np.uint8)
+        noisy_model_output = np.full((40, 40, 3), 200, dtype=np.uint8)
+        mask = np.zeros((40, 40), dtype=np.uint8)
+        mask[15:25, 15:25] = 1
+
+        result = InpaintingEngine._composite_inpainted(
+            original,
+            noisy_model_output,
+            mask,
+        )
+
+        np.testing.assert_array_equal(result[0, 0], original[0, 0])
+        np.testing.assert_array_equal(result[20, 20], noisy_model_output[20, 20])
+
+    def test_composite_inpainted_resizes_mismatched_model_output(self) -> None:
+        original = np.full((40, 40, 3), 100, dtype=np.uint8)
+        resized_model_output = np.full((40, 38, 3), 200, dtype=np.uint8)
+        mask = np.ones((40, 40), dtype=np.uint8)
+
+        result = InpaintingEngine._composite_inpainted(
+            original,
+            resized_model_output,
+            mask,
+        )
+
+        self.assertEqual(result.shape, original.shape)
+        np.testing.assert_array_equal(result[20, 20], [200, 200, 200])
 
 
 class OcrErrorHandlingTests(unittest.TestCase):
