@@ -21,7 +21,7 @@ const ACTIVE_IMAGE_STATUSES: MangaStatus[] = [
   "typesetting",
 ];
 
-const TERMINAL_ERROR_STATUSES: MangaStatus[] = ["error", "failed"];
+const TERMINAL_ERROR_STATUSES: MangaStatus[] = ["error", "failed", "canceled"];
 
 export const MangaFileItem: React.FC<MangaFileItemProps> = ({
   item,
@@ -41,9 +41,20 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
       ? "Translation completed."
       : `${item.progress}% Synthesis Logic`);
 
+  const handleCancel = async () => {
+    try {
+      await mangaApi.cancelJob(item.id);
+      onUpdate(item.id, { status: "canceled", message: "Job canceled by user." });
+    } catch (err) {
+      console.error("Failed to cancel job:", err);
+    }
+  };
+
   useEffect(() => {
     if (
       item.status === "completed" ||
+      item.status === "uploading" ||
+      item.status === "awaiting_review" ||
       TERMINAL_ERROR_STATUSES.includes(item.status)
     ) {
       return;
@@ -191,9 +202,19 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
               >
                 <Icon icon="mdi:script-text" />
               </button>
+              {item.status !== "completed" && !hasError && (
+                <button
+                  onClick={handleCancel}
+                  className="p-2 border border-[#333] text-[#444] hover:text-yellow-500 hover:border-yellow-500 transition-all text-xs"
+                  title="Cancel Job"
+                >
+                  <Icon icon="mdi:stop-circle-outline" />
+                </button>
+              )}
               <button
                 onClick={() => onRemove(item.id)}
                 className="p-2 border border-[#333] text-[#444] hover:text-red-500 hover:border-red-500 transition-all text-xs"
+                title="Delete Job"
               >
                 <Icon icon="mdi:delete-outline" />
               </button>

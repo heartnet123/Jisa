@@ -1,5 +1,5 @@
 import axios from "axios";
-import type { ProcessedManga, TranslationConfig } from "../types";
+import type { ProcessedManga, TranslationConfig, Project } from "../types";
 
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -20,9 +20,13 @@ export const mangaApi = {
   upload: async (
     file: File,
     _config: TranslationConfig,
+    project_id?: string,
   ): Promise<UploadResponse> => {
     const formData = new FormData();
     formData.append("file", file);
+    if (project_id) {
+      formData.append("project_id", project_id);
+    }
 
     const response = await axios.post<UploadResponse>(
       `${API_BASE_URL}/api/translate`,
@@ -64,4 +68,65 @@ export const mangaApi = {
     );
     return response.data;
   },
+
+  listJobs: async (): Promise<ProcessedManga[]> => {
+    const response = await axios.get<ProcessedManga[]>(
+      `${API_BASE_URL}/api/jobs`
+    );
+    return response.data.map((job) => ({
+      ...job,
+      originalUrl: resolveUrl(job.originalUrl) ?? resolveUrl((job as any).original_url) ?? "",
+      result_url: resolveUrl(job.result_url),
+      inpainted_url: resolveUrl(job.inpainted_url),
+    }));
+  },
+
+  deleteJob: async (id: string): Promise<{ status: string; job_id: string }> => {
+    const response = await axios.delete<{ status: string; job_id: string }>(
+      `${API_BASE_URL}/api/jobs/${id}`
+    );
+    return response.data;
+  },
+
+  cancelJob: async (id: string): Promise<{ status: string }> => {
+    const response = await axios.post<{ status: string }>(
+      `${API_BASE_URL}/api/jobs/${id}/cancel`
+    );
+    return response.data;
+  },
+
+  getSystemHealth: async (): Promise<any> => {
+    const response = await axios.get(`${API_BASE_URL}/api/system/health`);
+    return response.data;
+  },
+
+  testSandboxTranslation: async (payload: {
+    text: string;
+    provider: string;
+    model: string;
+    system_prompt: string;
+  }): Promise<{ translated_text: string }> => {
+    const response = await axios.post<{ translated_text: string }>(
+      `${API_BASE_URL}/api/sandbox/translate`,
+      payload
+    );
+    return response.data;
+  },
+
+  createProject: async (name: string): Promise<Project> => {
+    const response = await axios.post<Project>(
+      `${API_BASE_URL}/api/projects`,
+      { name }
+    );
+    return response.data;
+  },
+
+  listProjects: async (): Promise<Project[]> => {
+    const response = await axios.get<Project[]>(
+      `${API_BASE_URL}/api/projects`
+    );
+    return response.data;
+  },
 };
+
+

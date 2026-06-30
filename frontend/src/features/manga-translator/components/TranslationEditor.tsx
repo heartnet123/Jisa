@@ -246,7 +246,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
               ) : (
                 <>
                   <Icon icon="mdi:check-decagram" className="text-lg" />
-                  Approve & Render Publication
+                  ยืนยัน
                 </>
               )}
             </button>

@@ -9,6 +9,7 @@ export type MangaStatus =
   | "typesetting"
   | "completed"
   | "error"
+  | "canceled"
   | "failed";
 
 export interface BlockItem {
@@ -32,6 +33,7 @@ export interface ProcessedManga {
   status: MangaStatus;
   progress: number;
   blocks?: BlockItem[];
+  project_id?: string;
 }
 
 export interface TranslationConfig {
@@ -39,4 +41,11 @@ export interface TranslationConfig {
   model: string;
   systemPrompt: string;
   apiKey?: string;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  created_at: string;
+  job_ids: string[];
 }
