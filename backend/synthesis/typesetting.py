@@ -45,6 +45,7 @@ class TypesettingEngine:
         preferred_fonts.extend(
             [
                 fonts_dir / "Itim-Regular.ttf",
+                fonts_dir / "NotoSansThai-Regular.ttf",
                 fonts_dir / "Iannnnn-COW-Regular.ttf",
             ]
         )
@@ -126,14 +127,15 @@ class TypesettingEngine:
 
             for line in lines:
                 bbox = self._text_bbox(font, line)
-                line_w = bbox[2] - bbox[0]
-                line_x = target_x1 + max(0, (target_w - line_w) // 2)
+                line_x = target_x1 + target_w // 2
 
                 draw.text(
                     (line_x, current_y),
                     line,
                     font=font,
                     fill=self._color_to_rgba(block.color),
+                    anchor="ma",
+                    align="center",
                 )
                 current_y += line_height
 
@@ -183,9 +185,10 @@ class TypesettingEngine:
 
         for size in range(start, stop - 1, -1):
             font = self._load_font(size)
+            force_b = (size == stop)
             wrap_strategies: list[Callable[[str, ImageFont.FreeTypeFont | ImageFont.ImageFont, int], List[str]]] = [
-                self._wrap_text,
-                self._wrap_text_compact,
+                lambda t, f, w: self._wrap_text(t, f, w, force_break=force_b),
+                lambda t, f, w: self._wrap_text_compact(t, f, w, force_break=force_b),
             ]
 
             for wrap_strategy in wrap_strategies:
@@ -238,6 +241,7 @@ class TypesettingEngine:
         text: str,
         font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
         max_width: int,
+        force_break: bool = True,
     ) -> List[str]:
         """
         Wrap text by Thai-aware token groups first, then fall back to grapheme-like
@@ -270,6 +274,9 @@ class TypesettingEngine:
                     current = token.lstrip()
                     continue
 
+                if not force_break:
+                    return []
+
                 sublines = self._split_oversized_token(token, font, max_width)
                 if not sublines:
                     continue
@@ -287,6 +294,7 @@ class TypesettingEngine:
         text: str,
         font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
         max_width: int,
+        force_break: bool = True,
     ) -> List[str]:
         """
         More aggressive fallback wrap.
@@ -309,6 +317,8 @@ class TypesettingEngine:
             if self._line_width(font, candidate) <= max_width:
                 current = candidate
             else:
+                if not force_break:
+                    return []
                 if current:
                     lines.append(current.strip())
                 current = cluster.lstrip()
@@ -610,7 +620,7 @@ class TypesettingEngine:
         self,
         font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
     ) -> int:
-        bbox = self._text_bbox(font, "กAy")
+        bbox = self._text_bbox(font, "กAyปุ๊ฎ")
         base_h = max(1, bbox[3] - bbox[1])
         gap = max(1, int(math.ceil(base_h * self.line_gap_ratio)))
         return base_h + gap

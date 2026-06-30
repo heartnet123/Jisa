@@ -133,10 +133,16 @@ class InpaintingEngine:
         masks: List[np.ndarray],
         dilation_px: int,
     ) -> np.ndarray:
-        """OR all masks together and dilate the result."""
+        """OR all masks together, fill tiny gaps, and dilate the result."""
         combined = np.zeros(shape, dtype=np.uint8)
         for m in masks:
             combined = cv2.bitwise_or(combined, m.astype(np.uint8))
+
+        if int(combined.sum()) > 0:
+            close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+            combined = cv2.morphologyEx(
+                combined, cv2.MORPH_CLOSE, close_kernel, iterations=1
+            )
 
         if dilation_px > 0:
             kernel = cv2.getStructuringElement(
@@ -195,9 +201,6 @@ class InpaintingEngine:
 
         cleanup_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         dark_roi = cv2.morphologyEx(
-            dark_roi, cv2.MORPH_OPEN, cleanup_kernel, iterations=1
-        )
-        dark_roi = cv2.morphologyEx(
             dark_roi, cv2.MORPH_CLOSE, cleanup_kernel, iterations=1
         )
 
@@ -214,7 +217,7 @@ class InpaintingEngine:
         for label_idx in range(1, num_labels):
             area = int(stats[label_idx, cv2.CC_STAT_AREA])
 
-            if area < 8:
+            if area < 3:
                 continue
             if area > max(64, bubble_area // 3):
                 continue
@@ -238,8 +241,11 @@ class InpaintingEngine:
         mask: binary uint8 (1 = erase, 0 = keep).
         """
         if self._lama_available:
-            return self._inpaint_lama(image_np, mask)
-        return self._inpaint_opencv(image_np, mask)
+            result = self._inpaint_lama(image_np, mask)
+        else:
+            result = self._inpaint_opencv(image_np, mask)
+
+        return self._composite_inpainted(image_np, result, mask)
 
     def _inpaint_lama(self, image_np: np.ndarray, mask: np.ndarray) -> np.ndarray:
         """
@@ -281,12 +287,64 @@ class InpaintingEngine:
     @staticmethod
     def _inpaint_opencv(image_np: np.ndarray, mask: np.ndarray) -> np.ndarray:
         """
-        OpenCV Navier-Stokes fallback (no GPU, acceptable quality for
-        small text regions).
+        OpenCV Telea fallback (no GPU, acceptable quality for small text regions).
         """
-        logger.info("InpaintingEngine: using OpenCV INPAINT_NS fallback.")
+        logger.info("InpaintingEngine: using OpenCV INPAINT_TELEA fallback.")
         mask_u8 = (mask * 255).astype(np.uint8)
-        return cv2.inpaint(image_np, mask_u8, inpaintRadius=4, flags=cv2.INPAINT_NS)
+        return cv2.inpaint(
+            image_np,
+            mask_u8,
+            inpaintRadius=4,
+            flags=cv2.INPAINT_TELEA,
+        )
+
+    @staticmethod
+    def _composite_inpainted(
+        image_np: np.ndarray,
+        inpainted_np: np.ndarray,
+        mask: np.ndarray,
+        feather_px: int = 3,
+    ) -> np.ndarray:
+        """Keep model changes inside the erase mask and softly blend the edge."""
+        if int(mask.sum()) == 0:
+            return image_np.copy()
+
+        target_h, target_w = image_np.shape[:2]
+        if mask.shape != (target_h, target_w):
+            mask = cv2.resize(
+                mask.astype(np.uint8),
+                (target_w, target_h),
+                interpolation=cv2.INTER_NEAREST,
+            )
+
+        if inpainted_np.shape[:2] != (target_h, target_w):
+            inpainted_np = cv2.resize(
+                inpainted_np,
+                (target_w, target_h),
+                interpolation=cv2.INTER_LINEAR,
+            )
+
+        if inpainted_np.ndim == 2:
+            inpainted_np = cv2.cvtColor(inpainted_np, cv2.COLOR_GRAY2RGB)
+        elif inpainted_np.shape[2] == 4:
+            inpainted_np = cv2.cvtColor(inpainted_np, cv2.COLOR_RGBA2RGB)
+
+        alpha = (mask > 0).astype(np.float32)
+        if feather_px > 0:
+            kernel_size = feather_px * 2 + 1
+            feathered = cv2.GaussianBlur(
+                alpha,
+                (kernel_size, kernel_size),
+                sigmaX=0,
+            )
+            alpha = np.maximum(alpha, feathered)
+
+        alpha = np.clip(alpha[..., None], 0.0, 1.0)
+        blended = (
+            inpainted_np.astype(np.float32) * alpha
+            + image_np.astype(np.float32) * (1.0 - alpha)
+        )
+        return np.clip(blended, 0, 255).astype(np.uint8)
 
     @staticmethod
     def _flush_vram() -> None:
