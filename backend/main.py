@@ -5,14 +5,16 @@ import os
 import re
 import uuid
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Set
+from fastapi.responses import StreamingResponse
+
 
 import cv2
 import httpx
 import numpy as np
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -26,6 +28,27 @@ from synthesis.typesetting import TypesetBlock, TypesettingEngine
 load_dotenv()
 
 app = FastAPI(title="AI Manga Translator API")
+
+# Event Manager for Server-Sent Events (SSE)
+class EventManager:
+    def __init__(self):
+        self.listeners: Set[asyncio.Queue] = set()
+
+    def subscribe(self) -> asyncio.Queue:
+        queue = asyncio.Queue()
+        self.listeners.add(queue)
+        return queue
+
+    def unsubscribe(self, queue: asyncio.Queue):
+        self.listeners.discard(queue)
+
+    async def publish(self, event_type: str, data: any):
+        payload = {"event": event_type, "data": data}
+        for queue in list(self.listeners):
+            await queue.put(payload)
+
+event_manager = EventManager()
+
 
 # Configure CORS
 app.add_middleware(
@@ -79,6 +102,7 @@ PAGE_CONTEXT_TRANSLATION = os.getenv("PAGE_CONTEXT_TRANSLATION", "true").lower()
     "yes",
     "on",
 }
+TYPESETTING_FONT = os.getenv("TYPESETTING_FONT")
 
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -97,11 +121,19 @@ app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
 # In-memory store
 jobs_db: Dict[str, dict] = {}
+projects_db: Dict[str, dict] = {}
 
 # Initialize Synthesis Engines
 segmenter = SegmentationEngine(device=DEVICE)
 inpainter = InpaintingEngine(device=DEVICE)
-typesetter = TypesettingEngine()
+
+typeset_font_path = None
+if TYPESETTING_FONT:
+    candidate_path = Path(__file__).resolve().parent / "assets" / "fonts" / TYPESETTING_FONT
+    if candidate_path.exists():
+        typeset_font_path = str(candidate_path)
+
+typesetter = TypesettingEngine(font_path=typeset_font_path)
 
 
 def _normalize_upload_filename(filename: str | None) -> tuple[str, str]:
@@ -158,6 +190,18 @@ class JobStatus(BaseModel):
     result_url: str | None = None
     original_url: str | None = None
     blocks: List[BlockItem] | None = None
+    project_id: str | None = None
+
+
+class ProjectCreatePayload(BaseModel):
+    name: str
+
+
+class ProjectResponse(BaseModel):
+    id: str
+    name: str
+    created_at: str
+    job_ids: List[str]
 
 
 def encode_image(image_path: str) -> str:
@@ -358,9 +402,13 @@ async def process_manga_task(job_id: str, image_path: str):
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
         # ── Step 1: Segmentation ─────────────────────────────────────────────
+        if job_id not in jobs_db or jobs_db[job_id]["status"] == "canceled":
+            return
         jobs_db[job_id]["status"] = "segmenting"
         jobs_db[job_id]["progress"] = 10
         jobs_db[job_id]["message"] = "Detecting speech bubbles."
+        await notify_state_change()
+
         blocks = segmenter.detect_bubbles(img_rgb)
 
         if not blocks:
@@ -371,9 +419,13 @@ async def process_manga_task(job_id: str, image_path: str):
             )
 
         # ── Step 2: OCR per bubble (or whole image fallback) ─────────────────
+        if job_id not in jobs_db or jobs_db[job_id]["status"] == "canceled":
+            return
         jobs_db[job_id]["status"] = "ocr"
         jobs_db[job_id]["progress"] = 30
         jobs_db[job_id]["message"] = "Running OCR on detected text regions."
+        await notify_state_change()
+
 
         if blocks:
             # OCR each detected bubble independently
@@ -406,9 +458,13 @@ async def process_manga_task(job_id: str, image_path: str):
         jobs_db[job_id]["ocr_text"] = all_ocr_text
 
         # ── Step 3: Translation per bubble ───────────────────────────────────
+        if job_id not in jobs_db or jobs_db[job_id]["status"] == "canceled":
+            return
         jobs_db[job_id]["status"] = "translating"
         jobs_db[job_id]["progress"] = 50
         jobs_db[job_id]["message"] = "Translating extracted text."
+        await notify_state_change()
+
 
         source_texts = [b.text or "" for b in blocks]
         if PAGE_CONTEXT_TRANSLATION and len(source_texts) > 1:
@@ -445,6 +501,8 @@ async def process_manga_task(job_id: str, image_path: str):
         jobs_db[job_id]["status"] = "awaiting_review"
         jobs_db[job_id]["progress"] = 55
         jobs_db[job_id]["message"] = "Awaiting manual review of translations."
+        await notify_state_change()
+
 
     except Exception as e:
         import traceback
@@ -455,6 +513,8 @@ async def process_manga_task(job_id: str, image_path: str):
         jobs_db[job_id]["error"] = error_message
         jobs_db[job_id]["message"] = f"Job stopped: {error_message}"
         jobs_db[job_id]["progress"] = min(jobs_db[job_id].get("progress", 0), 95)
+        await notify_state_change()
+
 
 
 async def resume_manga_task(job_id: str, image_path: str, blocks: List[TextBlock]):
@@ -467,9 +527,13 @@ async def resume_manga_task(job_id: str, image_path: str, blocks: List[TextBlock
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
         # ── Step 4: Inpainting ───────────────────────────────────────────────
+        if job_id not in jobs_db or jobs_db[job_id]["status"] == "canceled":
+            return
         jobs_db[job_id]["status"] = "inpainting"
         jobs_db[job_id]["progress"] = 65
         jobs_db[job_id]["message"] = "Removing source text from the image."
+        await notify_state_change()
+
 
         # Unload segmenter (YOLO + SAM) before loading LaMa (VRAM budget)
         segmenter.unload_all()
@@ -505,9 +569,13 @@ async def resume_manga_task(job_id: str, image_path: str, blocks: List[TextBlock
         jobs_db[job_id]["inpainted_url"] = _to_public_url(inpainted_path)
 
         # ── Step 5: Typesetting ──────────────────────────────────────────────
+        if job_id not in jobs_db or jobs_db[job_id]["status"] == "canceled":
+            return
         jobs_db[job_id]["status"] = "typesetting"
         jobs_db[job_id]["progress"] = 80
         jobs_db[job_id]["message"] = "Rendering translated text into the page."
+        await notify_state_change()
+
 
         typeset_blocks = []
         if blocks:
@@ -538,6 +606,8 @@ async def resume_manga_task(job_id: str, image_path: str, blocks: List[TextBlock
         jobs_db[job_id]["progress"] = 100
         jobs_db[job_id]["message"] = "Translation completed."
         jobs_db[job_id]["result_url"] = _to_public_url(final_path)
+        await notify_state_change()
+
 
     except Exception as e:
         import traceback
@@ -548,6 +618,8 @@ async def resume_manga_task(job_id: str, image_path: str, blocks: List[TextBlock
         jobs_db[job_id]["error"] = error_message
         jobs_db[job_id]["message"] = f"Job stopped: {error_message}"
         jobs_db[job_id]["progress"] = min(jobs_db[job_id].get("progress", 0), 95)
+        await notify_state_change()
+
 
 
 @app.get("/")
@@ -567,7 +639,9 @@ async def check_ollama():
 
 @app.post("/api/translate", response_model=TranslateJobResponse, status_code=202)
 async def translate_manga(
-    background_tasks: BackgroundTasks, file: UploadFile = File(...)
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    project_id: str | None = Form(None)
 ):
     job_id = str(uuid.uuid4())
 
@@ -601,11 +675,17 @@ async def translate_manga(
         "progress": 0,
         "message": "Queued for translation.",
         "original_url": _to_public_url(file_path),
+        "project_id": project_id,
     }
 
+    if project_id and project_id in projects_db:
+        projects_db[project_id]["job_ids"].append(job_id)
+
     background_tasks.add_task(process_manga_task, job_id, str(file_path))
+    await notify_state_change()
 
     return {"id": job_id, "status": "queued"}
+
 
 
 @app.get("/api/status/{job_id}", response_model=JobStatus)
@@ -657,9 +737,254 @@ async def approve_job(
     file_path = UPLOAD_DIR / filename
 
     background_tasks.add_task(resume_manga_task, job_id, str(file_path), blocks)
+    await notify_state_change()
 
     return {"status": "resumed"}
 
 
+
+@app.post("/api/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str):
+    if job_id not in jobs_db:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = jobs_db[job_id]
+    if job["status"] in ["completed", "failed", "error", "canceled"]:
+        raise HTTPException(
+            status_code=400, detail=f"Job cannot be canceled in '{job['status']}' state"
+        )
+
+    job["status"] = "canceled"
+    job["message"] = "Job canceled by user."
+    await notify_state_change()
+    return {"status": "canceled"}
+
+
+
+class SandboxPayload(BaseModel):
+    text: str
+    provider: str
+    model: str
+    system_prompt: str
+
+
+@app.post("/api/sandbox/translate")
+async def sandbox_translate(payload: SandboxPayload):
+    """Executes a test translation for the configuration sandbox."""
+    try:
+        if not BYOK_API_KEY or BYOK_API_KEY == "your_api_key_here":
+            # Return a mock translation in the absence of configured key for testing
+            # Translate words mockingly to show connection and functionality
+            mocked = f"[Sandbox Simulation] แปล: {payload.text} (ใช้ระบบแปลอัตโนมัติจำลอง เนื่องจากไม่ได้ตั้งค่าคีย์ API)"
+            return {"translated_text": mocked}
+        
+        headers = {
+            "Authorization": f"Bearer {BYOK_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        api_payload = {
+            "model": payload.model if payload.model else BYOK_MODEL,
+            "messages": [
+                {"role": "system", "content": payload.system_prompt if payload.system_prompt else THAI_SYSTEM_PROMPT},
+                {"role": "user", "content": f"Translate the following manga text to Thai:\n\n{payload.text}"},
+            ],
+        }
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{BYOK_API_BASE}/chat/completions", headers=headers, json=api_payload
+            )
+            response.raise_for_status()
+            result = response.json()
+            translated = result["choices"][0]["message"]["content"]
+            return {"translated_text": translated}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/jobs")
+async def list_jobs():
+
+    """Returns a list of all jobs, omitting blocks_obj to keep response size lightweight."""
+    result = []
+    for job_id, job in jobs_db.items():
+        job_copy = job.copy()
+        job_copy["status"] = _status_for_api(job_copy.get("status", "queued"))
+        if "blocks_obj" in job_copy:
+            del job_copy["blocks_obj"]
+        result.append(job_copy)
+    return result[::-1]
+
+
+@app.post("/api/projects", response_model=ProjectResponse, status_code=201)
+async def create_project(payload: ProjectCreatePayload):
+    import datetime
+    project_id = str(uuid.uuid4())
+    project = {
+        "id": project_id,
+        "name": payload.name,
+        "created_at": datetime.datetime.now().isoformat(),
+        "job_ids": []
+    }
+    projects_db[project_id] = project
+    await notify_state_change()
+    return project
+
+
+@app.get("/api/projects", response_model=List[ProjectResponse])
+async def list_projects():
+    return list(projects_db.values())[::-1]
+
+
+@app.delete("/api/jobs/{job_id}")
+async def delete_job(job_id: str):
+    """Deletes a job from the database and cleans up associated files on disk."""
+    if job_id not in jobs_db:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    job = jobs_db[job_id]
+    original_url = job.get("original_url")
+    inpainted_url = job.get("inpainted_url")
+    result_url = job.get("result_url")
+    
+    for url in [original_url, inpainted_url, result_url]:
+        if url and url.startswith("/uploads/"):
+            filename = url.split("/")[-1]
+            file_path = UPLOAD_DIR / filename
+            try:
+                if file_path.exists():
+                    file_path.unlink()
+            except Exception as e:
+                print(f"Error deleting file {file_path}: {e}")
+                
+    project_id = job.get("project_id")
+    if project_id and project_id in projects_db:
+        if job_id in projects_db[project_id]["job_ids"]:
+            projects_db[project_id]["job_ids"].remove(job_id)
+            
+    del jobs_db[job_id]
+    await notify_state_change()
+    return {"status": "deleted", "job_id": job_id}
+
+
+
+@app.get("/api/system/health")
+async def get_system_health():
+    """Checks system health including GPU capabilities, Ollama models, and loaded fonts."""
+    import torch
+    
+    ollama_status = "disconnected"
+    ollama_models = []
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            response = await client.get(f"{OLLAMA_URL}/api/tags")
+            if response.status_code == 200:
+                ollama_status = "connected"
+                ollama_models = [m.get("name") for m in response.json().get("models", [])]
+    except Exception:
+        pass
+        
+    cuda_available = torch.cuda.is_available()
+    device_name = torch.cuda.get_device_name(0) if cuda_available else "CPU (No GPU)"
+    cuda_device = DEVICE
+    
+    fonts_dir = Path("assets/fonts")
+    available_fonts = []
+    if fonts_dir.exists():
+        available_fonts = [f.name for f in fonts_dir.glob("*.ttf")]
+        
+    total_jobs = len(jobs_db)
+    completed_jobs = sum(1 for j in jobs_db.values() if j.get("status") == "completed")
+    active_jobs = sum(1 for j in jobs_db.values() if j.get("status") in ["queued", "segmenting", "ocr", "translating", "inpainting", "typesetting"])
+    awaiting_review = sum(1 for j in jobs_db.values() if j.get("status") == "awaiting_review")
+    failed_jobs = sum(1 for j in jobs_db.values() if j.get("status") in ["failed", "error", "canceled"])
+    
+    return {
+        "ollama": {
+            "status": ollama_status,
+            "models": ollama_models,
+            "ocr_model": OCR_MODEL,
+        },
+        "translation": {
+            "byok_configured": bool(BYOK_API_KEY and BYOK_API_KEY != "your_api_key_here"),
+            "model": BYOK_MODEL,
+            "page_context_translation": PAGE_CONTEXT_TRANSLATION,
+        },
+        "hardware": {
+            "cuda_available": cuda_available,
+            "device": cuda_device,
+            "device_name": device_name,
+            "torch_version": torch.__version__,
+        },
+        "assets": {
+            "fonts": available_fonts,
+        },
+        "stats": {
+            "total": total_jobs,
+            "active": active_jobs,
+            "awaiting_review": awaiting_review,
+            "completed": completed_jobs,
+            "failed": failed_jobs,
+        }
+    }
+
+
+async def notify_state_change():
+    try:
+        jobs = await list_jobs()
+        await event_manager.publish("jobs", jobs)
+        health = await get_system_health()
+        await event_manager.publish("health", health)
+        projects = list(projects_db.values())[::-1]
+        await event_manager.publish("projects", projects)
+    except Exception as e:
+        print(f"Error in notify_state_change: {e}")
+
+
+@app.on_event("startup")
+async def startup_event():
+    async def periodic_health_broadcast():
+        while True:
+            try:
+                await asyncio.sleep(15)
+                health = await get_system_health()
+                await event_manager.publish("health", health)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                print(f"Error in periodic health broadcast: {e}")
+                await asyncio.sleep(5)
+                
+    asyncio.create_task(periodic_health_broadcast())
+
+
+@app.get("/api/stream/events")
+async def stream_events():
+    queue = event_manager.subscribe()
+    
+    async def event_generator():
+        try:
+            # Push initial state immediately on connect
+            initial_jobs = await list_jobs()
+            initial_health = await get_system_health()
+            initial_projects = list(projects_db.values())[::-1]
+            yield f"event: jobs\ndata: {json.dumps(initial_jobs, ensure_ascii=False)}\n\n"
+            yield f"event: health\ndata: {json.dumps(initial_health, ensure_ascii=False)}\n\n"
+            yield f"event: projects\ndata: {json.dumps(initial_projects, ensure_ascii=False)}\n\n"
+            
+            while True:
+                payload = await queue.get()
+                event_type = payload["event"]
+                event_data = payload["data"]
+                yield f"event: {event_type}\ndata: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            event_manager.unsubscribe(queue)
+            
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+
+

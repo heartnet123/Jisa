@@ -63,3 +63,11 @@ Thumbs.db
 .omx/
 .agents/
 .cursor/
+.claude/
+.codegraph/
+.codex/
+.gemini/
+.omc/
+.serena/
+backend/.omc/
+ROADMAP.html
