@@ -71,3 +71,5 @@ Thumbs.db
 .serena/
 backend/.omc/
 ROADMAP.html
+.omo/
+ARCHITECTURE_REVIEW.md
