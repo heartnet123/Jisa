@@ -1,7 +1,10 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
+import cv2
+import numpy as np
 from fastapi.testclient import TestClient
 
 import main
@@ -13,7 +16,10 @@ class RegionApiTests(unittest.TestCase):
         self._jobs_snapshot = dict(main.jobs_db)
         self._projects_snapshot = dict(main.projects_db)
         self._repository_snapshot = main.repository
+        self._upload_dir_snapshot = main.UPLOAD_DIR
         self._temporary_directory = tempfile.TemporaryDirectory()
+        main.UPLOAD_DIR = Path(self._temporary_directory.name) / "uploads"
+        main.UPLOAD_DIR.mkdir()
         self.repository = SQLiteReviewRepository(
             Path(self._temporary_directory.name) / "state.sqlite3"
         )
@@ -31,6 +37,7 @@ class RegionApiTests(unittest.TestCase):
         main.projects_db.update(self._projects_snapshot)
         self.repository.close()
         main.set_repository(self._repository_snapshot)
+        main.UPLOAD_DIR = self._upload_dir_snapshot
         self._temporary_directory.cleanup()
 
     def _seed_review_job(self) -> None:
@@ -182,6 +189,112 @@ class RegionApiTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 409)
+
+    def test_region_ocr_updates_only_selected_source_and_clears_translation(self) -> None:
+        (main.UPLOAD_DIR / "page.png").touch()
+        image = np.zeros((1600, 1000, 3), dtype=np.uint8)
+
+        with (
+            patch.object(main.cv2, "imread", return_value=image),
+            patch.object(
+                main,
+                "_crop_and_ocr",
+                new=AsyncMock(return_value="  refreshed source  "),
+            ) as crop_and_ocr,
+            patch.object(main, "notify_state_change", new=AsyncMock()),
+        ):
+            response = self.client.post("/api/jobs/job-1/regions/region-1/ocr")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["text"], "refreshed source")
+        self.assertIsNone(response.json()["translated_text"])
+        crop_and_ocr.assert_awaited_once()
+        self.assertEqual(crop_and_ocr.await_args.args[1], (100, 320, 300, 160))
+        saved = self.repository.load_regions("job-1")
+        self.assertEqual(saved[0].source_text, "refreshed source")
+        self.assertIsNone(saved[0].translated_text)
+        self.assertEqual(saved[1].source_text, "source two")
+        self.assertEqual(saved[1].translated_text, "translation two")
+
+    def test_mask_preview_writes_rgba_overlay_and_geometry_invalidates_it(self) -> None:
+        image = np.full((1600, 1000, 3), 255, dtype=np.uint8)
+        cv2.putText(
+            image,
+            "A",
+            (150, 420),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            3,
+            (0, 0, 0),
+            8,
+        )
+        cv2.imwrite(str(main.UPLOAD_DIR / "page.png"), image)
+        regions = self.repository.load_regions("job-1")
+        manual = regions[0]
+        self.repository.replace_regions(
+            "job-1",
+            [
+                RegionRecord(
+                    id=manual.id,
+                    job_id=manual.job_id,
+                    order=0,
+                    x=manual.x,
+                    y=manual.y,
+                    width=manual.width,
+                    height=manual.height,
+                    source="manual",
+                    source_text=manual.source_text,
+                    translated_text=manual.translated_text,
+                )
+            ],
+        )
+
+        with patch.object(main, "notify_state_change", new=AsyncMock()):
+            preview_response = self.client.post("/api/jobs/job-1/mask-preview")
+
+        self.assertEqual(preview_response.status_code, 200)
+        self.assertRegex(preview_response.json()["url"], r"\?v=\d+$")
+        preview_path = main.UPLOAD_DIR / "mask_preview_job-1.png"
+        self.assertTrue(preview_path.is_file())
+        overlay = cv2.imread(str(preview_path), cv2.IMREAD_UNCHANGED)
+        self.assertEqual(overlay.shape, (1600, 1000, 4))
+        self.assertGreater(int(overlay[:, :, 3].sum()), 0)
+        revision = preview_response.json()["revision"]
+
+        with patch.object(main, "notify_state_change", new=AsyncMock()):
+            replace_response = self.client.put(
+                "/api/jobs/job-1/regions",
+                json={
+                    "regions": [
+                        {
+                            "id": "region-1",
+                            "box": {
+                                "x": 0.11,
+                                "y": 0.2,
+                                "width": 0.3,
+                                "height": 0.1,
+                            },
+                        }
+                    ]
+                },
+            )
+
+        self.assertEqual(replace_response.status_code, 200)
+        self.assertFalse(preview_path.exists())
+        self.assertIsNone(main.jobs_db["job-1"]["mask_preview_url"])
+        self.assertEqual(main.jobs_db["job-1"]["preview_revision"], revision + 1)
+
+    def test_mask_preview_reports_missing_detected_mask_without_mutation(self) -> None:
+        cv2.imwrite(
+            str(main.UPLOAD_DIR / "page.png"),
+            np.full((1600, 1000, 3), 255, dtype=np.uint8),
+        )
+        before = self.repository.load_regions("job-1")
+
+        response = self.client.post("/api/jobs/job-1/mask-preview")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("Detected mask is unavailable", response.json()["detail"])
+        self.assertEqual(self.repository.load_regions("job-1"), before)
 
 
 if __name__ == "__main__":

@@ -434,6 +434,11 @@ class RegionCollectionResponse(BaseModel):
     regions: List[BlockItem]
 
 
+class MaskPreviewResponse(BaseModel):
+    url: str
+    revision: int
+
+
 class ApprovePayload(BaseModel):
     translations: Dict[str, str]
 
@@ -998,6 +1003,26 @@ def _require_review_job(job_id: str) -> dict:
     return job
 
 
+def _source_image_path(job: dict) -> Path:
+    image_path = UPLOAD_DIR / Path(job.get("original_url") or "").name
+    if not image_path.is_file():
+        raise HTTPException(status_code=404, detail="Source image not found")
+    return image_path
+
+
+def _mask_preview_path(job_id: str) -> Path:
+    return UPLOAD_DIR / f"mask_preview_{job_id}.png"
+
+
+def _invalidate_mask_preview(job: dict) -> None:
+    job["preview_revision"] = int(job.get("preview_revision") or 0) + 1
+    job["mask_preview_url"] = None
+    try:
+        _mask_preview_path(job["id"]).unlink(missing_ok=True)
+    except OSError as exc:
+        print(f"Error deleting stale mask preview for {job['id']}: {exc}")
+
+
 def _same_region_box(region: RegionRecord, box: NormalizedBox) -> bool:
     return all(
         math.isclose(current, proposed, rel_tol=0, abs_tol=1e-12)
@@ -1061,8 +1086,7 @@ async def replace_job_regions(
 
     repository.replace_regions(job_id, saved_regions)
     job["region_mode"] = "manual_override"
-    job["preview_revision"] = int(job.get("preview_revision") or 0) + 1
-    job["mask_preview_url"] = None
+    _invalidate_mask_preview(job)
     repository.save_job(job)
     _hydrate_job_regions(job)
 
@@ -1122,6 +1146,103 @@ async def patch_job_region(
     _hydrate_job_regions(job)
     await notify_state_change()
     return BlockItem.model_validate(job["blocks"][region_index])
+
+
+@app.post(
+    "/api/jobs/{job_id}/regions/{region_id}/ocr",
+    response_model=BlockItem,
+)
+async def rerun_region_ocr(job_id: str, region_id: str) -> BlockItem:
+    job = _require_review_job(job_id)
+    regions = repository.load_regions(job_id)
+    region_index = next(
+        (index for index, region in enumerate(regions) if region.id == region_id),
+        None,
+    )
+    if region_index is None:
+        raise HTTPException(status_code=404, detail="Region not found")
+
+    image_path = _source_image_path(job)
+    image_bgr = cv2.imread(str(image_path))
+    if image_bgr is None:
+        raise HTTPException(status_code=422, detail="Source image could not be decoded")
+    image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+    current = regions[region_index]
+    pixel_box = normalized_box_to_pixels(
+        (current.x, current.y, current.width, current.height),
+        int(job["image_width"]),
+        int(job["image_height"]),
+    )
+    try:
+        source_text = (
+            await _crop_and_ocr(image_rgb, pixel_box, str(image_path), job_id)
+        ).strip()
+    except OcrError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    regions[region_index] = RegionRecord(
+        id=current.id,
+        job_id=current.job_id,
+        order=current.order,
+        x=current.x,
+        y=current.y,
+        width=current.width,
+        height=current.height,
+        source=current.source,
+        source_text=source_text,
+        translated_text=None,
+        mask_path=current.mask_path,
+    )
+    repository.replace_regions(job_id, regions)
+    _hydrate_job_regions(job)
+    await notify_state_change()
+    return BlockItem.model_validate(job["blocks"][region_index])
+
+
+@app.post(
+    "/api/jobs/{job_id}/mask-preview",
+    response_model=MaskPreviewResponse,
+)
+async def generate_mask_preview(job_id: str) -> MaskPreviewResponse:
+    job = _require_review_job(job_id)
+    regions = repository.load_regions(job_id)
+    for region in regions:
+        if region.source != "detected":
+            continue
+        if not region.mask_path or not Path(region.mask_path).is_file():
+            raise HTTPException(
+                status_code=409,
+                detail=f"Detected mask is unavailable for region {region.id}",
+            )
+
+    image_path = _source_image_path(job)
+    image_bgr = cv2.imread(str(image_path))
+    if image_bgr is None:
+        raise HTTPException(status_code=422, detail="Source image could not be decoded")
+    image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+    blocks = hydrate_engine_blocks(job, regions)
+    bubble_masks = [block.mask for block in blocks if block.mask is not None]
+    text_masks = inpainter.build_text_masks(image_rgb, bubble_masks)
+    combined_mask = inpainter._combine_masks(
+        image_rgb.shape[:2], text_masks, dilation_px=12
+    )
+
+    overlay = np.zeros((*image_rgb.shape[:2], 4), dtype=np.uint8)
+    overlay[combined_mask > 0] = (255, 0, 128, 160)
+
+    preview_path = _mask_preview_path(job_id)
+    if not cv2.imwrite(
+        str(preview_path), cv2.cvtColor(overlay, cv2.COLOR_RGBA2BGRA)
+    ):
+        raise HTTPException(status_code=500, detail="Mask preview could not be written")
+
+    revision = int(job.get("preview_revision") or 0) + 1
+    preview_url = f"/uploads/{preview_path.name}?v={revision}"
+    job["preview_revision"] = revision
+    job["mask_preview_url"] = preview_url
+    repository.save_job(job)
+    await notify_state_change()
+    return MaskPreviewResponse(url=preview_url, revision=revision)
 
 
 @app.post("/api/jobs/{job_id}/approve")
@@ -1353,7 +1474,8 @@ async def delete_job(job_id: str):
                 print(f"Error deleting mask {region.mask_path}: {exc}")
     preview_url = job.get("mask_preview_url")
     if preview_url and preview_url.startswith("/uploads/"):
-        (UPLOAD_DIR / preview_url.removeprefix("/uploads/")).unlink(missing_ok=True)
+        preview_name = preview_url.removeprefix("/uploads/").split("?", 1)[0]
+        (UPLOAD_DIR / preview_name).unlink(missing_ok=True)
 
     del jobs_db[job_id]
     repository.delete_job(job_id)
