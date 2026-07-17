@@ -48,4 +48,35 @@ export interface Project {
   name: string;
   created_at: string;
   job_ids: string[];
+  page_order: string[];
 }
+
+export interface SystemHealth {
+  ollama: {
+    status: string;
+    models: string[];
+    ocr_model: string;
+  };
+  translation: {
+    byok_configured: boolean;
+    model: string;
+    page_context_translation: boolean;
+  };
+  hardware: {
+    cuda_available: boolean;
+    device: string;
+    device_name: string;
+    torch_version: string;
+  };
+  assets: {
+    fonts: string[];
+  };
+  stats: {
+    total: number;
+    active: number;
+    awaiting_review: number;
+    completed: number;
+    failed: number;
+  };
+}
+

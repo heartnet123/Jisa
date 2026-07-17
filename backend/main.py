@@ -202,6 +202,12 @@ class ProjectResponse(BaseModel):
     name: str
     created_at: str
     job_ids: List[str]
+    page_order: List[str]
+
+
+class ReorderPayload(BaseModel):
+    page_order: List[str]
+
 
 
 def encode_image(image_path: str) -> str:
@@ -680,6 +686,10 @@ async def translate_manga(
 
     if project_id and project_id in projects_db:
         projects_db[project_id]["job_ids"].append(job_id)
+        if "page_order" not in projects_db[project_id]:
+            projects_db[project_id]["page_order"] = list(projects_db[project_id]["job_ids"])
+        else:
+            projects_db[project_id]["page_order"].append(job_id)
 
     background_tasks.add_task(process_manga_task, job_id, str(file_path))
     await notify_state_change()
@@ -823,7 +833,8 @@ async def create_project(payload: ProjectCreatePayload):
         "id": project_id,
         "name": payload.name,
         "created_at": datetime.datetime.now().isoformat(),
-        "job_ids": []
+        "job_ids": [],
+        "page_order": []
     }
     projects_db[project_id] = project
     await notify_state_change()
@@ -832,7 +843,54 @@ async def create_project(payload: ProjectCreatePayload):
 
 @app.get("/api/projects", response_model=List[ProjectResponse])
 async def list_projects():
+    for proj in projects_db.values():
+        if "page_order" not in proj:
+            proj["page_order"] = list(proj["job_ids"])
     return list(projects_db.values())[::-1]
+
+
+@app.put("/api/projects/{project_id}/reorder", response_model=ProjectResponse)
+async def reorder_project_pages(project_id: str, payload: ReorderPayload):
+    if project_id not in projects_db:
+        raise HTTPException(status_code=404, detail="Project not found")
+    project = projects_db[project_id]
+    
+    # Ensure job_ids lists match page_order elements (must be same set of elements)
+    if set(payload.page_order) != set(project["job_ids"]):
+         raise HTTPException(
+             status_code=400, 
+             detail="page_order must contain exactly the project's job IDs"
+         )
+    
+    project["page_order"] = payload.page_order
+    await notify_state_change()
+    return project
+
+
+@app.put("/api/projects/{project_id}", response_model=ProjectResponse)
+async def update_project(project_id: str, payload: ProjectCreatePayload):
+    if project_id not in projects_db:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    projects_db[project_id]["name"] = payload.name
+    await notify_state_change()
+    return projects_db[project_id]
+
+
+@app.delete("/api/projects/{project_id}")
+async def delete_project(project_id: str):
+    if project_id not in projects_db:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Disassociate all jobs belonging to this project
+    for job_id in projects_db[project_id]["job_ids"]:
+        if job_id in jobs_db:
+            jobs_db[job_id]["project_id"] = None
+            
+    del projects_db[project_id]
+    await notify_state_change()
+    return {"status": "deleted", "project_id": project_id}
+
 
 
 @app.delete("/api/jobs/{job_id}")
@@ -860,6 +918,8 @@ async def delete_job(job_id: str):
     if project_id and project_id in projects_db:
         if job_id in projects_db[project_id]["job_ids"]:
             projects_db[project_id]["job_ids"].remove(job_id)
+        if "page_order" in projects_db[project_id] and job_id in projects_db[project_id]["page_order"]:
+            projects_db[project_id]["page_order"].remove(job_id)
             
     del jobs_db[job_id]
     await notify_state_change()
@@ -934,6 +994,12 @@ async def notify_state_change():
         await event_manager.publish("jobs", jobs)
         health = await get_system_health()
         await event_manager.publish("health", health)
+        
+        # Ensure page_order is present defensively before publishing
+        for proj in projects_db.values():
+            if "page_order" not in proj:
+                proj["page_order"] = list(proj["job_ids"])
+                
         projects = list(projects_db.values())[::-1]
         await event_manager.publish("projects", projects)
     except Exception as e:
@@ -966,6 +1032,12 @@ async def stream_events():
             # Push initial state immediately on connect
             initial_jobs = await list_jobs()
             initial_health = await get_system_health()
+            
+            # Ensure page_order is present defensively
+            for proj in projects_db.values():
+                if "page_order" not in proj:
+                    proj["page_order"] = list(proj["job_ids"])
+                    
             initial_projects = list(projects_db.values())[::-1]
             yield f"event: jobs\ndata: {json.dumps(initial_jobs, ensure_ascii=False)}\n\n"
             yield f"event: health\ndata: {json.dumps(initial_health, ensure_ascii=False)}\n\n"

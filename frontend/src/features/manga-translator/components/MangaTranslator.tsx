@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { mangaApi, API_BASE_URL } from '../api/mangaApi';
-import type { ProcessedManga, TranslationConfig, Project } from '../types';
+import type { ProcessedManga, TranslationConfig, Project, SystemHealth } from '../types';
 import { MangaFileItem } from './MangaFileItem';
 import { TranslationEditor } from './TranslationEditor';
 import { ThaiText } from './ThaiText';
@@ -27,6 +27,8 @@ export const MangaTranslator: React.FC = () => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [newProjectName, setNewProjectName] = useState('');
+  const [isEditingProjectName, setIsEditingProjectName] = useState(false);
+  const [editingProjectName, setEditingProjectName] = useState('');
   
   // Job Queue & uploads
   const [files, setFiles] = useState<ProcessedManga[]>([]);
@@ -41,7 +43,7 @@ export const MangaTranslator: React.FC = () => {
   });
 
   // System Health States
-  const [systemHealth, setSystemHealth] = useState<any>(null);
+  const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null);
   const [healthLoading, setHealthLoading] = useState(true);
 
   // Archive & Table Search/Filter
@@ -112,7 +114,7 @@ export const MangaTranslator: React.FC = () => {
         const allJobs = JSON.parse(event.data) as ProcessedManga[];
         const resolvedJobs = allJobs.map((job) => ({
           ...job,
-          originalUrl: resolveUrl(job.originalUrl) ?? resolveUrl((job as any).original_url) ?? "",
+          originalUrl: resolveUrl(job.originalUrl) ?? resolveUrl(job.original_url) ?? "",
           result_url: resolveUrl(job.result_url),
           inpainted_url: resolveUrl(job.inpainted_url),
         }));
@@ -226,7 +228,7 @@ export const MangaTranslator: React.FC = () => {
     try {
       const health = await mangaApi.getSystemHealth();
       setSystemHealth(health);
-    } catch (e) {}
+    } catch {}
   }, [config]);
 
   // File drag handlers
@@ -285,6 +287,69 @@ export const MangaTranslator: React.FC = () => {
     }
   }, []);
 
+  const handleMovePage = useCallback(async (projectId: string, jobId: string, direction: 'up' | 'down') => {
+    const proj = projects.find(p => p.id === projectId);
+    if (!proj) return;
+    
+    const projJobs = files.filter(f => f.project_id === projectId);
+    const order = proj.page_order && proj.page_order.length > 0
+      ? [...proj.page_order]
+      : projJobs.map(f => f.id);
+      
+    projJobs.forEach(job => {
+      if (!order.includes(job.id)) {
+        order.push(job.id);
+      }
+    });
+    
+    const index = order.indexOf(jobId);
+    if (index === -1) return;
+    
+    if (direction === 'up' && index > 0) {
+      const temp = order[index];
+      order[index] = order[index - 1];
+      order[index - 1] = temp;
+    } else if (direction === 'down' && index < order.length - 1) {
+      const temp = order[index];
+      order[index] = order[index + 1];
+      order[index + 1] = temp;
+    } else {
+      return;
+    }
+    
+    try {
+      const updatedProj = await mangaApi.reorderProjectPages(projectId, order);
+      setProjects(prev => prev.map(p => p.id === projectId ? { ...p, page_order: updatedProj.page_order, job_ids: updatedProj.job_ids } : p));
+    } catch (err) {
+      console.error('Failed to reorder project pages:', err);
+    }
+  }, [projects, files]);
+
+  const handleRenameProject = useCallback(async (projectId: string, newName: string) => {
+    if (!newName.trim()) return;
+    try {
+      const updatedProj = await mangaApi.renameProject(projectId, newName.trim());
+      setProjects(prev => prev.map(p => p.id === projectId ? { ...p, name: updatedProj.name } : p));
+    } catch (err) {
+      console.error('Failed to rename project:', err);
+    }
+  }, []);
+
+  const handleDeleteProject = useCallback(async (projectId: string) => {
+    if (!confirm('Are you sure you want to delete this project session? Sheets inside this session will NOT be deleted, but they will be unlinked.')) {
+      return;
+    }
+    try {
+      await mangaApi.deleteProject(projectId);
+      setProjects(prev => prev.filter(p => p.id !== projectId));
+      setActiveProjectId(null);
+      setFiles(prev => prev.map(f => f.project_id === projectId ? { ...f, project_id: undefined } : f));
+    } catch (err) {
+      console.error('Failed to delete project:', err);
+    }
+  }, []);
+
+
   // Run ad-hoc translation test sandbox
   const runSandboxTest = async () => {
     if (!sandboxText.trim()) return;
@@ -301,8 +366,9 @@ export const MangaTranslator: React.FC = () => {
       });
       setSandboxResult(response.translated_text);
       setSandboxTime(Math.round(performance.now() - startTime));
-    } catch (err: any) {
-      setSandboxError(err?.response?.data?.detail || err.message || 'Translation sandbox failed.');
+    } catch (err) {
+      const axiosError = err as { response?: { data?: { detail?: string } }; message?: string };
+      setSandboxError(axiosError.response?.data?.detail || axiosError.message || 'Translation sandbox failed.');
     } finally {
       setSandboxLoading(false);
     }
@@ -313,8 +379,6 @@ export const MangaTranslator: React.FC = () => {
   const activeJobs = files.filter(f => ['queued', 'segmenting', 'ocr', 'translating', 'inpainting', 'typesetting'].includes(f.status));
   const completedJobsCount = files.filter(f => f.status === 'completed').length;
   const awaitingReviewCount = files.filter(f => f.status === 'awaiting_review').length;
-  const failedJobsCount = files.filter(f => ['failed', 'error'].includes(f.status)).length;
-  
   const successRate = totalUploaded > 0 
     ? Math.round((completedJobsCount / totalUploaded) * 100) 
     : 100;
@@ -1024,34 +1088,128 @@ export const MangaTranslator: React.FC = () => {
                 <div className="lg:col-span-3 space-y-6">
                   {activeProjectId ? (() => {
                     const activeProj = projects.find(p => p.id === activeProjectId);
-                    const activeProjJobs = files.filter(f => f.project_id === activeProjectId);
-                    const completedCount = activeProjJobs.filter(f => f.status === 'completed').length;
-                    const processingCount = activeProjJobs.filter(f => ['queued', 'segmenting', 'ocr', 'translating', 'inpainting', 'typesetting'].includes(f.status)).length;
+                    if (!activeProj) return null;
+
+                    let activeProjJobs = files.filter(f => f.project_id === activeProjectId);
                     
+                    // Sort activeProjJobs by the order defined in activeProj.page_order
+                    if (activeProj.page_order && activeProj.page_order.length > 0) {
+                      activeProjJobs = [...activeProjJobs].sort((a, b) => {
+                        const idxA = activeProj.page_order.indexOf(a.id);
+                        const idxB = activeProj.page_order.indexOf(b.id);
+                        if (idxA === -1 && idxB === -1) return 0;
+                        if (idxA === -1) return 1;
+                        if (idxB === -1) return -1;
+                        return idxA - idxB;
+                      });
+                    }
+
+                    const completedCount = activeProjJobs.filter(f => f.status === 'completed').length;
+                    const processingCount = activeProjJobs.filter(f => ['queued', 'segmenting', 'ocr', 'translating', 'inpainting', 'typesetting', 'uploading'].includes(f.status)).length;
+                    const failedCount = activeProjJobs.filter(f => ['failed', 'error'].includes(f.status)).length;
+                    const awaitingReviewCount = activeProjJobs.filter(f => f.status === 'awaiting_review').length;
+                    
+                    // Group jobs with their original sorted index
+                    const indexedJobs = activeProjJobs.map((file, index) => ({ file, index }));
+                    
+                    const needsAttention = indexedJobs.filter(item => 
+                      ['awaiting_review', 'failed', 'error', 'canceled'].includes(item.file.status)
+                    );
+                    const inPipeline = indexedJobs.filter(item => 
+                      ['queued', 'segmenting', 'ocr', 'translating', 'inpainting', 'typesetting', 'uploading'].includes(item.file.status)
+                    );
+                    const finalized = indexedJobs.filter(item => 
+                      item.file.status === 'completed'
+                    );
+
                     return (
                       <>
                         {/* Project Header Stats */}
                         <div className="bg-[#0b0b0b] border border-[#1c1c1c] p-6 rounded-lg flex flex-wrap justify-between items-center gap-4">
-                          <div>
-                            <h3 className="text-base font-black tracking-tight text-white uppercase font-mono">
-                              {activeProj?.name}
-                            </h3>
-                            <p className="text-[9px] text-[#555] font-mono uppercase tracking-widest mt-1">
-                              ID: {activeProjectId} // Created: {activeProj && new Date(activeProj.created_at).toLocaleString()}
+                          <div className="space-y-1">
+                            {isEditingProjectName ? (
+                              <form 
+                                onSubmit={(e) => {
+                                  e.preventDefault();
+                                  handleRenameProject(activeProj.id, editingProjectName);
+                                  setIsEditingProjectName(false);
+                                }}
+                                className="flex items-center gap-2"
+                              >
+                                <input
+                                  type="text"
+                                  value={editingProjectName}
+                                  onChange={(e) => setEditingProjectName(e.target.value)}
+                                  className="text-xs font-mono px-2 py-1.5 border border-cyan-500 bg-[#121212] rounded text-white focus:outline-none uppercase"
+                                  autoFocus
+                                />
+                                <button
+                                  type="submit"
+                                  className="p-1.5 bg-cyan-500 hover:bg-cyan-400 text-black rounded flex items-center justify-center cursor-pointer transition-colors"
+                                  title="Save Name"
+                                >
+                                  <Icon icon="mdi:check" className="text-xs font-bold" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setIsEditingProjectName(false)}
+                                  className="p-1.5 border border-[#333] hover:border-red-500 hover:text-red-500 rounded flex items-center justify-center cursor-pointer transition-colors"
+                                  title="Cancel"
+                                >
+                                  <Icon icon="mdi:close" className="text-xs" />
+                                </button>
+                              </form>
+                            ) : (
+                              <div className="flex items-center gap-2 group/title">
+                                <h3 className="text-base font-black tracking-tight text-white uppercase font-mono">
+                                  {activeProj.name}
+                                </h3>
+                                <button
+                                  onClick={() => {
+                                    setEditingProjectName(activeProj.name);
+                                    setIsEditingProjectName(true);
+                                  }}
+                                  className="opacity-0 group-hover/title:opacity-100 p-1 text-[#666] hover:text-cyan-400 rounded transition-all cursor-pointer"
+                                  title="Rename Session"
+                                >
+                                  <Icon icon="mdi:pencil-outline" className="text-xs" />
+                                </button>
+                              </div>
+                            )}
+                            <p className="text-[9px] text-[#555] font-mono uppercase tracking-widest">
+                              ID: {activeProjectId} {"//"} Created: {new Date(activeProj.created_at).toLocaleString()}
                             </p>
                           </div>
 
-                          <div className="flex gap-4 font-mono text-[10px]">
-                            <div className="bg-[#111] border border-[#222] px-3 py-2 rounded">
-                              <span className="text-[#555] uppercase block text-[8px] font-bold">Processed</span>
-                              <span className="text-green-400 font-bold text-sm">{completedCount}</span>
-                              <span className="text-[#444] text-[9px]"> / {activeProjJobs.length} pages</span>
+                          <div className="flex items-center gap-4">
+                            <div className="flex gap-2 font-mono text-[10px]">
+                              <div className="bg-[#111] border border-[#222] px-3 py-2 rounded">
+                                <span className="text-[#555] uppercase block text-[8px] font-bold">Processed</span>
+                                <span className="text-green-400 font-bold text-sm">{completedCount}</span>
+                                <span className="text-[#444] text-[9px]"> / {activeProjJobs.length} pages</span>
+                              </div>
+                              <div className="bg-[#111] border border-[#222] px-3 py-2 rounded">
+                                <span className="text-[#555] uppercase block text-[8px] font-bold">In Progress</span>
+                                <span className="text-cyan-400 font-bold text-sm">{processingCount}</span>
+                                <span className="text-[#444] text-[9px]"> active</span>
+                              </div>
+                              {(failedCount > 0 || awaitingReviewCount > 0) && (
+                                <div className="bg-[#111] border border-[#222] px-3 py-2 rounded">
+                                  <span className="text-[#555] uppercase block text-[8px] font-bold">Attention</span>
+                                  <span className="text-yellow-500 font-bold text-sm">{failedCount + awaitingReviewCount}</span>
+                                  <span className="text-[#444] text-[9px]"> items</span>
+                                </div>
+                              )}
                             </div>
-                            <div className="bg-[#111] border border-[#222] px-3 py-2 rounded">
-                              <span className="text-[#555] uppercase block text-[8px] font-bold">In Progress</span>
-                              <span className="text-cyan-400 font-bold text-sm">{processingCount}</span>
-                              <span className="text-[#444] text-[9px]"> active</span>
-                            </div>
+
+                            <button
+                              onClick={() => handleDeleteProject(activeProj.id)}
+                              className="px-3 py-2 border border-[#222] hover:border-red-500/50 hover:text-red-500 hover:bg-red-500/5 transition-all text-[9px] font-mono uppercase tracking-widest rounded flex items-center gap-1 cursor-pointer"
+                              title="Delete Project Session"
+                            >
+                              <Icon icon="mdi:delete-outline" className="text-xs" />
+                              Delete
+                            </button>
                           </div>
                         </div>
 
@@ -1104,10 +1262,15 @@ export const MangaTranslator: React.FC = () => {
                         </div>
 
                         {/* Project Page Jobs */}
-                        <div className="space-y-4">
-                          <span className="font-mono text-xs text-[#555] uppercase tracking-widest font-black block border-b border-[#1c1c1c] pb-3">
-                            Session Sheet Catalogue ({activeProjJobs.length})
-                          </span>
+                        <div className="space-y-8">
+                          <div className="border-b border-[#1c1c1c] pb-3 flex justify-between items-center">
+                            <span className="font-mono text-xs text-[#555] uppercase tracking-widest font-black block">
+                              Session Sheet Catalogue ({activeProjJobs.length})
+                            </span>
+                            <span className="text-[9px] text-[#444] font-mono uppercase tracking-widest">
+                              Stable page ordered session
+                            </span>
+                          </div>
                           
                           {activeProjJobs.length === 0 ? (
                             <div className="p-8 border border-dashed border-[#1c1c1c] text-center text-xs text-[#555] font-mono uppercase bg-[#080808]">
@@ -1117,15 +1280,141 @@ export const MangaTranslator: React.FC = () => {
                               </span>
                             </div>
                           ) : (
-                            <div className="grid grid-cols-1 gap-6">
-                              {activeProjJobs.map(file => (
-                                <MangaFileItem 
-                                  key={file.id} 
-                                  item={file} 
-                                  onUpdate={handleUpdate} 
-                                  onRemove={handleRemove} 
-                                />
-                              ))}
+                            <div className="space-y-8">
+                              {/* 1. Needs Attention Group */}
+                              {needsAttention.length > 0 && (
+                                <div className="space-y-4">
+                                  <div className="flex items-center gap-2 text-yellow-500/90 font-mono text-[10px] uppercase tracking-widest font-black">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-yellow-500" />
+                                    Needs Attention ({needsAttention.length})
+                                  </div>
+                                  <div className="grid grid-cols-1 gap-4 pl-4 border-l border-yellow-950/40">
+                                    {needsAttention.map(({ file, index }) => (
+                                      <div key={file.id} className="flex items-start gap-4 group">
+                                        <div className="flex flex-col items-center justify-center bg-[#0d0d0d] border border-[#1a1a1a] rounded p-2 min-w-[70px] h-24 shrink-0">
+                                          <span className="text-[8px] font-mono text-[#555] uppercase tracking-wider font-bold">PAGE</span>
+                                          <span className="text-base font-black font-mono text-cyan-400">#{index + 1}</span>
+                                          <div className="flex gap-1 mt-2">
+                                            <button 
+                                              disabled={index === 0}
+                                              onClick={() => handleMovePage(activeProj.id, file.id, 'up')}
+                                              className="p-1 border border-[#222] bg-[#111] hover:border-cyan-500/30 hover:text-cyan-400 disabled:opacity-20 disabled:hover:border-[#222] disabled:hover:text-inherit rounded flex items-center justify-center transition-colors cursor-pointer"
+                                              title="Move Page Up"
+                                            >
+                                              <Icon icon="mdi:arrow-up" className="text-xs" />
+                                            </button>
+                                            <button 
+                                              disabled={index === activeProjJobs.length - 1}
+                                              onClick={() => handleMovePage(activeProj.id, file.id, 'down')}
+                                              className="p-1 border border-[#222] bg-[#111] hover:border-cyan-500/30 hover:text-cyan-400 disabled:opacity-20 disabled:hover:border-[#222] disabled:hover:text-inherit rounded flex items-center justify-center transition-colors cursor-pointer"
+                                              title="Move Page Down"
+                                            >
+                                              <Icon icon="mdi:arrow-down" className="text-xs" />
+                                            </button>
+                                          </div>
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                          <MangaFileItem 
+                                            item={file} 
+                                            onUpdate={handleUpdate} 
+                                            onRemove={handleRemove} 
+                                          />
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* 2. In Pipeline Group */}
+                              {inPipeline.length > 0 && (
+                                <div className="space-y-4">
+                                  <div className="flex items-center gap-2 text-cyan-500/90 font-mono text-[10px] uppercase tracking-widest font-black">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-cyan-500 animate-pulse" />
+                                    In Pipeline ({inPipeline.length})
+                                  </div>
+                                  <div className="grid grid-cols-1 gap-4 pl-4 border-l border-cyan-950/30">
+                                    {inPipeline.map(({ file, index }) => (
+                                      <div key={file.id} className="flex items-start gap-4 group">
+                                        <div className="flex flex-col items-center justify-center bg-[#0d0d0d] border border-[#1a1a1a] rounded p-2 min-w-[70px] h-24 shrink-0">
+                                          <span className="text-[8px] font-mono text-[#555] uppercase tracking-wider font-bold">PAGE</span>
+                                          <span className="text-base font-black font-mono text-cyan-400">#{index + 1}</span>
+                                          <div className="flex gap-1 mt-2">
+                                            <button 
+                                              disabled={index === 0}
+                                              onClick={() => handleMovePage(activeProj.id, file.id, 'up')}
+                                              className="p-1 border border-[#222] bg-[#111] hover:border-cyan-500/30 hover:text-cyan-400 disabled:opacity-20 disabled:hover:border-[#222] disabled:hover:text-inherit rounded flex items-center justify-center transition-colors cursor-pointer"
+                                              title="Move Page Up"
+                                            >
+                                              <Icon icon="mdi:arrow-up" className="text-xs" />
+                                            </button>
+                                            <button 
+                                              disabled={index === activeProjJobs.length - 1}
+                                              onClick={() => handleMovePage(activeProj.id, file.id, 'down')}
+                                              className="p-1 border border-[#222] bg-[#111] hover:border-cyan-500/30 hover:text-cyan-400 disabled:opacity-20 disabled:hover:border-[#222] disabled:hover:text-inherit rounded flex items-center justify-center transition-colors cursor-pointer"
+                                              title="Move Page Down"
+                                            >
+                                              <Icon icon="mdi:arrow-down" className="text-xs" />
+                                            </button>
+                                          </div>
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                          <MangaFileItem 
+                                            item={file} 
+                                            onUpdate={handleUpdate} 
+                                            onRemove={handleRemove} 
+                                          />
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* 3. Completed Group */}
+                              {finalized.length > 0 && (
+                                <div className="space-y-4">
+                                  <div className="flex items-center gap-2 text-green-500/90 font-mono text-[10px] uppercase tracking-widest font-black">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                                    Finalized Publication Sheets ({finalized.length})
+                                  </div>
+                                  <div className="grid grid-cols-1 gap-4 pl-4 border-l border-green-950/30">
+                                    {finalized.map(({ file, index }) => (
+                                      <div key={file.id} className="flex items-start gap-4 group">
+                                        <div className="flex flex-col items-center justify-center bg-[#0d0d0d] border border-[#1a1a1a] rounded p-2 min-w-[70px] h-24 shrink-0">
+                                          <span className="text-[8px] font-mono text-[#555] uppercase tracking-wider font-bold">PAGE</span>
+                                          <span className="text-base font-black font-mono text-cyan-400">#{index + 1}</span>
+                                          <div className="flex gap-1 mt-2">
+                                            <button 
+                                              disabled={index === 0}
+                                              onClick={() => handleMovePage(activeProj.id, file.id, 'up')}
+                                              className="p-1 border border-[#222] bg-[#111] hover:border-cyan-500/30 hover:text-cyan-400 disabled:opacity-20 disabled:hover:border-[#222] disabled:hover:text-inherit rounded flex items-center justify-center transition-colors cursor-pointer"
+                                              title="Move Page Up"
+                                            >
+                                              <Icon icon="mdi:arrow-up" className="text-xs" />
+                                            </button>
+                                            <button 
+                                              disabled={index === activeProjJobs.length - 1}
+                                              onClick={() => handleMovePage(activeProj.id, file.id, 'down')}
+                                              className="p-1 border border-[#222] bg-[#111] hover:border-cyan-500/30 hover:text-cyan-400 disabled:opacity-20 disabled:hover:border-[#222] disabled:hover:text-inherit rounded flex items-center justify-center transition-colors cursor-pointer"
+                                              title="Move Page Down"
+                                            >
+                                              <Icon icon="mdi:arrow-down" className="text-xs" />
+                                            </button>
+                                          </div>
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                          <MangaFileItem 
+                                            item={file} 
+                                            onUpdate={handleUpdate} 
+                                            onRemove={handleRemove} 
+                                          />
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           )}
                         </div>
@@ -1177,7 +1466,7 @@ export const MangaTranslator: React.FC = () => {
                       <label className="text-[10px] text-[#555] uppercase tracking-widest block font-bold">API LLM provider</label>
                       <select 
                         value={config.provider}
-                        onChange={(e) => setConfig(prev => ({ ...prev, provider: e.target.value as any }))}
+                        onChange={(e) => setConfig(prev => ({ ...prev, provider: e.target.value as TranslationConfig['provider'] }))}
                         className="w-full bg-[#121212] border border-[#222] p-2.5 rounded text-white focus:outline-none focus:border-cyan-500 text-xs"
                       >
                         <option value="openai">OpenAI (GPT BYOK)</option>
@@ -1189,7 +1478,7 @@ export const MangaTranslator: React.FC = () => {
                     {/* Model Selector */}
                     <div className="space-y-2">
                       <label className="text-[10px] text-[#555] uppercase tracking-widest block font-bold">Linguistic model</label>
-                      {config.provider === 'ollama' && systemHealth?.ollama?.models?.length > 0 ? (
+                      {config.provider === 'ollama' && systemHealth && systemHealth.ollama && systemHealth.ollama.models.length > 0 ? (
                         <select
                           value={config.model}
                           onChange={(e) => setConfig(prev => ({ ...prev, model: e.target.value }))}
@@ -1344,7 +1633,7 @@ export const MangaTranslator: React.FC = () => {
               <div className="flex items-center gap-3">
                 <Icon icon="mdi:magnify" className="text-xl text-cyan-500" />
                 <h2 className="text-sm font-bold tracking-tight uppercase font-mono text-white">
-                  Publication Inspector <span className="text-[#444]">//</span> Slide View
+                  Publication Inspector <span className="text-[#444]">{"//"}</span> Slide View
                 </h2>
                 <span className="text-[10px] font-mono bg-cyan-950 text-cyan-400 border border-cyan-800/40 px-2 py-0.5 rounded">
                   {inspectItem.filename}
@@ -1361,7 +1650,7 @@ export const MangaTranslator: React.FC = () => {
                   ].map((mode) => (
                     <button
                       key={mode.id}
-                      onClick={() => setInspectMode(mode.id as any)}
+                      onClick={() => setInspectMode(mode.id as 'translated' | 'inpainted' | 'original')}
                       className={cn(
                         "px-3 py-1 text-[9px] font-mono font-bold transition-all cursor-pointer",
                         inspectMode === mode.id

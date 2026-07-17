@@ -1,5 +1,5 @@
 import axios from "axios";
-import type { ProcessedManga, TranslationConfig, Project } from "../types";
+import type { ProcessedManga, TranslationConfig, Project, SystemHealth } from "../types";
 
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -45,8 +45,8 @@ export const mangaApi = {
     const data = response.data;
 
     const originalUrl =
-      resolveUrl((data as any).originalUrl) ??
-      resolveUrl((data as any).original_url);
+      resolveUrl(data.originalUrl) ??
+      resolveUrl(data.original_url);
 
     // Fix all relative image URLs so <img src> resolves to the backend origin
     return {
@@ -54,7 +54,7 @@ export const mangaApi = {
       originalUrl: originalUrl ?? "",
       result_url: resolveUrl(data.result_url),
       inpainted_url: resolveUrl(data.inpainted_url),
-      status: (data.status as any) === "processing" ? "segmenting" : data.status,
+      status: (data.status as unknown as string) === "processing" ? "segmenting" : data.status,
     };
   },
 
@@ -75,7 +75,7 @@ export const mangaApi = {
     );
     return response.data.map((job) => ({
       ...job,
-      originalUrl: resolveUrl(job.originalUrl) ?? resolveUrl((job as any).original_url) ?? "",
+      originalUrl: resolveUrl(job.originalUrl) ?? resolveUrl(job.original_url) ?? "",
       result_url: resolveUrl(job.result_url),
       inpainted_url: resolveUrl(job.inpainted_url),
     }));
@@ -95,8 +95,8 @@ export const mangaApi = {
     return response.data;
   },
 
-  getSystemHealth: async (): Promise<any> => {
-    const response = await axios.get(`${API_BASE_URL}/api/system/health`);
+  getSystemHealth: async (): Promise<SystemHealth> => {
+    const response = await axios.get<SystemHealth>(`${API_BASE_URL}/api/system/health`);
     return response.data;
   },
 
@@ -124,6 +124,29 @@ export const mangaApi = {
   listProjects: async (): Promise<Project[]> => {
     const response = await axios.get<Project[]>(
       `${API_BASE_URL}/api/projects`
+    );
+    return response.data;
+  },
+
+  reorderProjectPages: async (projectId: string, pageOrder: string[]): Promise<Project> => {
+    const response = await axios.put<Project>(
+      `${API_BASE_URL}/api/projects/${projectId}/reorder`,
+      { page_order: pageOrder }
+    );
+    return response.data;
+  },
+
+  deleteProject: async (projectId: string): Promise<{ status: string }> => {
+    const response = await axios.delete<{ status: string }>(
+      `${API_BASE_URL}/api/projects/${projectId}`
+    );
+    return response.data;
+  },
+
+  renameProject: async (projectId: string, name: string): Promise<Project> => {
+    const response = await axios.put<Project>(
+      `${API_BASE_URL}/api/projects/${projectId}`,
+      { name }
     );
     return response.data;
   },

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Icon } from '@iconify-icon/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { BlockItem, ProcessedManga } from '../types';
@@ -16,24 +16,20 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
   onClose,
   onUpdate,
 }) => {
-  const [blocks, setBlocks] = useState<BlockItem[]>(item.blocks || []);
+  const [blocks] = useState<BlockItem[]>(() => item.blocks || []);
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
-  const [editedTranslations, setEditedTranslations] = useState<Record<string, string>>({});
-  const [naturalSize, setNaturalSize] = useState({ w: 0, h: 0 });
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
-
-  useEffect(() => {
-    // If blocks are already in the item, use them
-    if (item.blocks && item.blocks.length > 0) {
-      setBlocks(item.blocks);
-      const initialEdits: Record<string, string> = {};
+  const [editedTranslations, setEditedTranslations] = useState<Record<string, string>>(() => {
+    const initialEdits: Record<string, string> = {};
+    if (item.blocks) {
       item.blocks.forEach(b => {
         initialEdits[b.id] = b.translated_text || '';
       });
-      setEditedTranslations(initialEdits);
     }
-  }, [item.blocks]);
+    return initialEdits;
+  });
+  const [naturalSize, setNaturalSize] = useState({ w: 0, h: 0 });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
     const { naturalWidth, naturalHeight } = e.currentTarget;
@@ -77,7 +73,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
         <div className="flex items-center gap-3">
           <Icon icon="mdi:translate" className="text-xl text-cyan-500" />
           <h2 className="text-lg font-bold tracking-tight uppercase font-mono">
-            Translation Studio <span className="text-[#555]">//</span> HITL Review
+            Translation Studio <span className="text-[#555]">{"//"}</span> HITL Review
           </h2>
           <span className="text-[10px] font-mono bg-cyan-950 text-cyan-400 border border-cyan-800/50 px-2 py-0.5 rounded">
             {item.filename}
