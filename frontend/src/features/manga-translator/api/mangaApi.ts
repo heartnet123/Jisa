@@ -1,5 +1,12 @@
 import axios from "axios";
-import type { ProcessedManga, TranslationConfig, Project, SystemHealth } from "../types";
+import type {
+  BlockItem,
+  ProcessedManga,
+  Project,
+  RegionCollectionResponse,
+  SystemHealth,
+  TranslationConfig,
+} from "../types";
 
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -65,6 +72,36 @@ export const mangaApi = {
     const response = await axios.post<{ status: string }>(
       `${API_BASE_URL}/api/jobs/${id}/approve`,
       { translations },
+    );
+    return response.data;
+  },
+
+  replaceRegions: async (
+    id: string,
+    regions: BlockItem[],
+  ): Promise<RegionCollectionResponse> => {
+    const response = await axios.put<RegionCollectionResponse>(
+      `${API_BASE_URL}/api/jobs/${id}/regions`,
+      {
+        regions: regions.map(({ id: regionId, box, text, translated_text }) => ({
+          id: regionId,
+          box,
+          text,
+          translated_text,
+        })),
+      },
+    );
+    return response.data;
+  },
+
+  patchRegion: async (
+    jobId: string,
+    regionId: string,
+    updates: { text?: string | null; translated_text?: string | null },
+  ): Promise<BlockItem> => {
+    const response = await axios.patch<BlockItem>(
+      `${API_BASE_URL}/api/jobs/${jobId}/regions/${regionId}`,
+      updates,
     );
     return response.data;
   },

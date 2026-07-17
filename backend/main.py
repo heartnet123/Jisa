@@ -1,11 +1,12 @@
 import asyncio
 import base64
 import json
+import math
 import os
 import re
 import uuid
 from pathlib import Path
-from typing import Dict, List, Set
+from typing import Dict, List, Literal, Set
 from fastapi.responses import StreamingResponse
 
 
@@ -17,7 +18,7 @@ from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from job_errors import OcrError, ocr_failure_message
 from repository import RegionRecord, ReviewRepository, SQLiteReviewRepository
@@ -177,10 +178,16 @@ def set_repository(new_repository: ReviewRepository, *, hydrate: bool = False) -
         hydrate_repository_state()
 
 
-def _pixel_box_to_normalized(
+def pixel_box_to_normalized(
     box: tuple[int, int, int, int], image_width: int, image_height: int
 ) -> tuple[float, float, float, float]:
     x, y, width, height = box
+    if image_width <= 0 or image_height <= 0:
+        raise ValueError("Image dimensions must be positive")
+    if width <= 0 or height <= 0:
+        raise ValueError("Box dimensions must be positive")
+    if x < 0 or y < 0 or x + width > image_width or y + height > image_height:
+        raise ValueError("Pixel box must be contained within the image")
     return (
         x / image_width,
         y / image_height,
@@ -189,16 +196,31 @@ def _pixel_box_to_normalized(
     )
 
 
-def _normalized_box_to_pixels(
-    region: RegionRecord, image_width: int, image_height: int
+def normalized_box_to_pixels(
+    box: tuple[float, float, float, float], image_width: int, image_height: int
 ) -> tuple[int, int, int, int]:
-    x = min(image_width - 1, max(0, round(region.x * image_width)))
-    y = min(image_height - 1, max(0, round(region.y * image_height)))
-    width = max(1, round(region.width * image_width))
-    height = max(1, round(region.height * image_height))
-    width = min(width, image_width - x)
-    height = min(height, image_height - y)
-    return x, y, width, height
+    x, y, width, height = box
+    if image_width <= 0 or image_height <= 0:
+        raise ValueError("Image dimensions must be positive")
+    values = (x, y, width, height)
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("Normalized box values must be finite")
+    if x < 0 or y < 0 or width <= 0 or height <= 0:
+        raise ValueError("Normalized box must have a non-negative origin and positive size")
+    if x + width > 1 or y + height > 1:
+        raise ValueError("Normalized box must be contained within the page")
+
+    left = min(image_width - 1, max(0, math.floor(round(x * image_width, 12))))
+    top = min(image_height - 1, max(0, math.floor(round(y * image_height, 12))))
+    right = min(
+        image_width,
+        max(left + 1, math.ceil(round((x + width) * image_width, 12))),
+    )
+    bottom = min(
+        image_height,
+        max(top + 1, math.ceil(round((y + height) * image_height, 12))),
+    )
+    return left, top, right - left, bottom - top
 
 
 def _mask_path_for(job_id: str, block_id: str) -> Path:
@@ -222,7 +244,7 @@ def _persist_runtime_regions(job_id: str, blocks: List[TextBlock]) -> None:
                 raise RuntimeError(f"Failed to persist detected mask for block {block.id}")
             mask_path = str(candidate)
 
-        x, y, width, height = _pixel_box_to_normalized(
+        x, y, width, height = pixel_box_to_normalized(
             block.box, image_width, image_height
         )
         regions.append(
@@ -243,6 +265,27 @@ def _persist_runtime_regions(job_id: str, blocks: List[TextBlock]) -> None:
 
     repository.save_job(job)
     repository.replace_regions(job_id, regions)
+    job["blocks"] = _public_regions(job_id)
+
+
+def _public_region(region: RegionRecord) -> dict:
+    return {
+        "id": region.id,
+        "box": {
+            "x": region.x,
+            "y": region.y,
+            "width": region.width,
+            "height": region.height,
+        },
+        "source": region.source,
+        "text": region.source_text,
+        "translated_text": region.translated_text,
+        "mask_available": bool(region.mask_path),
+    }
+
+
+def _public_regions(job_id: str) -> list[dict]:
+    return [_public_region(region) for region in repository.load_regions(job_id)]
 
 
 def _hydrate_job_regions(job: dict) -> None:
@@ -254,7 +297,11 @@ def _hydrate_job_regions(job: dict) -> None:
     blocks: list[TextBlock] = []
     public_blocks: list[dict] = []
     for region in repository.load_regions(job["id"]):
-        box = _normalized_box_to_pixels(region, image_width, image_height)
+        box = normalized_box_to_pixels(
+            (region.x, region.y, region.width, region.height),
+            image_width,
+            image_height,
+        )
         mask = None
         if region.mask_path:
             loaded = cv2.imread(region.mask_path, cv2.IMREAD_GRAYSCALE)
@@ -268,14 +315,7 @@ def _hydrate_job_regions(job: dict) -> None:
             mask=mask,
         )
         blocks.append(block)
-        public_blocks.append(
-            {
-                "id": region.id,
-                "box": list(box),
-                "text": region.source_text,
-                "translated_text": region.translated_text,
-            }
-        )
+        public_blocks.append(_public_region(region))
 
     job["blocks_obj"] = blocks
     job["blocks"] = public_blocks
@@ -312,11 +352,65 @@ class TranslateJobResponse(BaseModel):
     status: str
 
 
+class NormalizedBox(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
+
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+    width: float = Field(gt=0, le=1)
+    height: float = Field(gt=0, le=1)
+
+    @model_validator(mode="after")
+    def validate_page_bounds(self) -> "NormalizedBox":
+        if self.x + self.width > 1 or self.y + self.height > 1:
+            raise ValueError("Box must be contained within the normalized page")
+        return self
+
+    def as_tuple(self) -> tuple[float, float, float, float]:
+        return self.x, self.y, self.width, self.height
+
+
 class BlockItem(BaseModel):
     id: str
-    box: List[int]
+    box: NormalizedBox
+    source: Literal["detected", "manual"] = "detected"
     text: str | None = None
     translated_text: str | None = None
+    mask_available: bool = False
+
+
+class RegionMutation(BaseModel):
+    id: str = Field(min_length=1)
+    box: NormalizedBox
+    text: str | None = None
+    translated_text: str | None = None
+
+
+class ReplaceRegionsPayload(BaseModel):
+    regions: List[RegionMutation]
+
+    @model_validator(mode="after")
+    def validate_unique_ids(self) -> "ReplaceRegionsPayload":
+        ids = [region.id for region in self.regions]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Region IDs must be unique")
+        return self
+
+
+class PatchRegionPayload(BaseModel):
+    text: str | None = None
+    translated_text: str | None = None
+
+    @model_validator(mode="after")
+    def validate_non_empty_patch(self) -> "PatchRegionPayload":
+        if not self.model_fields_set:
+            raise ValueError("At least one text field must be provided")
+        return self
+
+
+class RegionCollectionResponse(BaseModel):
+    region_mode: Literal["detected", "manual_override"]
+    regions: List[BlockItem]
 
 
 class ApprovePayload(BaseModel):
@@ -334,6 +428,7 @@ class JobStatus(BaseModel):
     original_url: str | None = None
     blocks: List[BlockItem] | None = None
     project_id: str | None = None
+    region_mode: Literal["detected", "manual_override"] = "detected"
 
 
 class ProjectCreatePayload(BaseModel):
@@ -854,6 +949,146 @@ async def get_status(job_id: str):
     job = jobs_db[job_id].copy()
     job["status"] = _status_for_api(job.get("status", "queued"))
     return job
+
+
+def _require_review_job(job_id: str) -> dict:
+    if job_id not in jobs_db:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = jobs_db[job_id]
+    if job.get("status") != "awaiting_review":
+        raise HTTPException(
+            status_code=409,
+            detail="Regions can only be edited while the job is awaiting review",
+        )
+    if not job.get("image_width") or not job.get("image_height"):
+        raise HTTPException(status_code=409, detail="Job image dimensions are unavailable")
+    return job
+
+
+def _same_region_box(region: RegionRecord, box: NormalizedBox) -> bool:
+    return all(
+        math.isclose(current, proposed, rel_tol=0, abs_tol=1e-12)
+        for current, proposed in zip(
+            (region.x, region.y, region.width, region.height), box.as_tuple()
+        )
+    )
+
+
+@app.put(
+    "/api/jobs/{job_id}/regions",
+    response_model=RegionCollectionResponse,
+)
+async def replace_job_regions(
+    job_id: str, payload: ReplaceRegionsPayload
+) -> RegionCollectionResponse:
+    job = _require_review_job(job_id)
+    previous_regions = repository.load_regions(job_id)
+    previous_by_id = {region.id: region for region in previous_regions}
+    saved_regions: list[RegionRecord] = []
+    stale_mask_paths: set[str] = set()
+
+    for order, mutation in enumerate(payload.regions):
+        previous = previous_by_id.get(mutation.id)
+        geometry_unchanged = previous is not None and _same_region_box(
+            previous, mutation.box
+        )
+        if previous and previous.mask_path and not geometry_unchanged:
+            stale_mask_paths.add(previous.mask_path)
+
+        source_text = mutation.text
+        translated_text = mutation.translated_text
+        if previous:
+            if "text" not in mutation.model_fields_set:
+                source_text = previous.source_text
+            if "translated_text" not in mutation.model_fields_set:
+                translated_text = previous.translated_text
+
+        saved_regions.append(
+            RegionRecord(
+                id=mutation.id,
+                job_id=job_id,
+                order=order,
+                x=mutation.box.x,
+                y=mutation.box.y,
+                width=mutation.box.width,
+                height=mutation.box.height,
+                source=(previous.source if geometry_unchanged else "manual"),
+                source_text=source_text,
+                translated_text=translated_text,
+                mask_path=previous.mask_path if geometry_unchanged else None,
+            )
+        )
+
+    saved_ids = {region.id for region in saved_regions}
+    stale_mask_paths.update(
+        region.mask_path
+        for region in previous_regions
+        if region.id not in saved_ids and region.mask_path
+    )
+
+    repository.replace_regions(job_id, saved_regions)
+    job["region_mode"] = "manual_override"
+    job["preview_revision"] = int(job.get("preview_revision") or 0) + 1
+    job["mask_preview_url"] = None
+    repository.save_job(job)
+    _hydrate_job_regions(job)
+
+    for mask_path in stale_mask_paths:
+        try:
+            Path(mask_path).unlink(missing_ok=True)
+        except OSError as exc:
+            print(f"Error deleting stale mask {mask_path}: {exc}")
+
+    await notify_state_change()
+    return RegionCollectionResponse(
+        region_mode="manual_override",
+        regions=[BlockItem.model_validate(region) for region in job["blocks"]],
+    )
+
+
+@app.patch(
+    "/api/jobs/{job_id}/regions/{region_id}",
+    response_model=BlockItem,
+)
+async def patch_job_region(
+    job_id: str, region_id: str, payload: PatchRegionPayload
+) -> BlockItem:
+    job = _require_review_job(job_id)
+    regions = repository.load_regions(job_id)
+    region_index = next(
+        (index for index, region in enumerate(regions) if region.id == region_id),
+        None,
+    )
+    if region_index is None:
+        raise HTTPException(status_code=404, detail="Region not found")
+
+    current = regions[region_index]
+    source_text = current.source_text
+    translated_text = current.translated_text
+    if "text" in payload.model_fields_set:
+        source_text = payload.text
+        if "translated_text" not in payload.model_fields_set:
+            translated_text = None
+    if "translated_text" in payload.model_fields_set:
+        translated_text = payload.translated_text
+
+    regions[region_index] = RegionRecord(
+        id=current.id,
+        job_id=current.job_id,
+        order=current.order,
+        x=current.x,
+        y=current.y,
+        width=current.width,
+        height=current.height,
+        source=current.source,
+        source_text=source_text,
+        translated_text=translated_text,
+        mask_path=current.mask_path,
+    )
+    repository.replace_regions(job_id, regions)
+    _hydrate_job_regions(job)
+    await notify_state_change()
+    return BlockItem.model_validate(job["blocks"][region_index])
 
 
 @app.post("/api/jobs/{job_id}/approve")

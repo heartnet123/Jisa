@@ -109,10 +109,10 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
                 {blocks.map(b => (
                   <g key={b.id}>
                     <rect
-                      x={b.box[0]}
-                      y={b.box[1]}
-                      width={b.box[2]}
-                      height={b.box[3]}
+                      x={b.box.x * naturalSize.w}
+                      y={b.box.y * naturalSize.h}
+                      width={b.box.width * naturalSize.w}
+                      height={b.box.height * naturalSize.h}
                       className={`fill-cyan-500/5 stroke-2 cursor-pointer transition-all duration-300 hover:fill-cyan-500/20 ${
                         selectedBlockId === b.id
                           ? 'stroke-yellow-400 fill-cyan-500/10 stroke-[3px]'
@@ -125,8 +125,8 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
                       }}
                     />
                     <text
-                      x={b.box[0] + 5}
-                      y={b.box[1] + 15}
+                      x={b.box.x * naturalSize.w + 5}
+                      y={b.box.y * naturalSize.h + 15}
                       className="fill-black bg-cyan-400 px-1 font-mono text-[8px] font-bold select-none pointer-events-none"
                     >
                       {blocks.indexOf(b) + 1}

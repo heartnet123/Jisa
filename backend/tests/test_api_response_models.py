@@ -53,6 +53,12 @@ class ApiResponseModelTests(unittest.TestCase):
         self.assertIn("original_url", schemas["JobStatus"]["properties"])
         self.assertIn("result_url", schemas["JobStatus"]["properties"])
         self.assertIn("error", schemas["JobStatus"]["properties"])
+        self.assertEqual(
+            schemas["BlockItem"]["properties"]["box"]["$ref"],
+            "#/components/schemas/NormalizedBox",
+        )
+        normalized_box = schemas["NormalizedBox"]["properties"]
+        self.assertEqual(set(normalized_box), {"x", "y", "width", "height"})
         self.assertNotIn("ocr_text", schemas["JobStatus"]["properties"])
         self.assertNotIn("translated_text", schemas["JobStatus"]["properties"])
         self.assertNotIn("inpainted_url", schemas["JobStatus"]["properties"])
@@ -103,7 +109,10 @@ class ApiResponseModelTests(unittest.TestCase):
         )
         review_job = main.jobs_db["review-job"]
         self.assertEqual(review_job["status"], "awaiting_review")
-        self.assertEqual(review_job["blocks"][0]["box"], [20, 20, 60, 40])
+        self.assertEqual(
+            review_job["blocks"][0]["box"],
+            {"x": 0.1, "y": 0.2, "width": 0.3, "height": 0.4},
+        )
         self.assertEqual(review_job["blocks_obj"][0].translated_text, "translation")
 
     def test_status_response_filters_internal_job_fields(self) -> None:
@@ -148,7 +157,8 @@ class ApiResponseModelTests(unittest.TestCase):
             "blocks": [
                 {
                     "id": "block-1",
-                    "box": [10, 20, 100, 50],
+                    "box": {"x": 0.1, "y": 0.2, "width": 0.5, "height": 0.5},
+                    "source": "detected",
                     "text": "Japanese",
                     "translated_text": "Thai Translation draft"
                 }
@@ -163,7 +173,10 @@ class ApiResponseModelTests(unittest.TestCase):
         self.assertEqual(body["status"], "awaiting_review")
         self.assertEqual(len(body["blocks"]), 1)
         self.assertEqual(body["blocks"][0]["id"], "block-1")
-        self.assertEqual(body["blocks"][0]["box"], [10, 20, 100, 50])
+        self.assertEqual(
+            body["blocks"][0]["box"],
+            {"x": 0.1, "y": 0.2, "width": 0.5, "height": 0.5},
+        )
         self.assertEqual(body["blocks"][0]["text"], "Japanese")
         self.assertEqual(body["blocks"][0]["translated_text"], "Thai Translation draft")
 
@@ -190,11 +203,14 @@ class ApiResponseModelTests(unittest.TestCase):
             "progress": 55,
             "message": "Awaiting manual review of translations.",
             "original_url": "/uploads/source.png",
+            "image_width": 200,
+            "image_height": 100,
             "blocks_obj": [mock_block],
             "blocks": [
                 {
                     "id": "block-1",
-                    "box": [10, 20, 100, 50],
+                    "box": {"x": 0.05, "y": 0.2, "width": 0.5, "height": 0.5},
+                    "source": "detected",
                     "text": "Japanese",
                     "translated_text": "Thai Draft"
                 }
