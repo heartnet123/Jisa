@@ -105,7 +105,13 @@ class ApiResponseModelTests(unittest.TestCase):
         self.assertEqual(body["blocks"][0]["text"], "Japanese")
         self.assertEqual(body["blocks"][0]["translated_text"], "Thai Translation draft")
 
-    def test_approve_job_updates_translations_and_resumes(self) -> None:
+    @unittest.mock.patch("main.cv2.imread")
+    @unittest.mock.patch("main.cv2.imwrite")
+    def test_approve_job_updates_translations_and_resumes(self, mock_imwrite, mock_imread) -> None:
+        import numpy as np
+        mock_imread.return_value = np.zeros((100, 100, 3), dtype=np.uint8)
+        mock_imwrite.return_value = True
+
         from synthesis.segmentation import TextBlock
         mock_block = TextBlock(
             id="block-1",
