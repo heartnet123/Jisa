@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Icon } from '@iconify-icon/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { BlockItem, ProcessedManga } from '../types';
 import { mangaApi } from '../api/mangaApi';
 import { ThaiText } from './ThaiText';
+import { RegionCanvas } from './RegionCanvas';
 
 interface TranslationEditorProps {
   item: ProcessedManga;
@@ -16,7 +17,8 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
   onClose,
   onUpdate,
 }) => {
-  const [blocks] = useState<BlockItem[]>(() => item.blocks || []);
+  const [blocks, setBlocks] = useState<BlockItem[]>(() => item.blocks || []);
+  const savedBlocksRef = useRef(blocks);
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
   const [editedTranslations, setEditedTranslations] = useState<Record<string, string>>(() => {
     const initialEdits: Record<string, string> = {};
@@ -27,20 +29,43 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     }
     return initialEdits;
   });
-  const [naturalSize, setNaturalSize] = useState({ w: 0, h: 0 });
+  const [isSavingRegions, setIsSavingRegions] = useState(false);
+  const [regionError, setRegionError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-
-  const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
-    const { naturalWidth, naturalHeight } = e.currentTarget;
-    setNaturalSize({ w: naturalWidth, h: naturalHeight });
-  };
 
   const handleTranslationChange = (blockId: string, val: string) => {
     setEditedTranslations(prev => ({
       ...prev,
       [blockId]: val,
     }));
+  };
+
+  const handleRegionCommit = async (nextBlocks: BlockItem[]) => {
+    setIsSavingRegions(true);
+    setRegionError(null);
+    try {
+      const saved = await mangaApi.replaceRegions(item.id, nextBlocks);
+      savedBlocksRef.current = saved.regions;
+      setBlocks(saved.regions);
+      setEditedTranslations(previous => {
+        const next: Record<string, string> = {};
+        for (const block of saved.regions) {
+          next[block.id] = previous[block.id] ?? block.translated_text ?? '';
+        }
+        return next;
+      });
+      onUpdate(item.id, {
+        blocks: saved.regions,
+        region_mode: saved.region_mode,
+      });
+    } catch (err) {
+      console.error('Failed to save regions:', err);
+      setBlocks(savedBlocksRef.current);
+      setRegionError(err instanceof Error ? err.message : 'Failed to save regions');
+    } finally {
+      setIsSavingRegions(false);
+    }
   };
 
   const handleApprove = async () => {
@@ -69,13 +94,13 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
   return (
     <div className="fixed inset-0 z-50 bg-[#060606]/95 backdrop-blur-md flex flex-col font-sans selection:bg-cyan-500/30 overflow-hidden">
       {/* Top Header Bar */}
-      <header className="flex items-center justify-between px-6 py-4 border-b border-[#222] bg-[#0c0c0c] z-10">
-        <div className="flex items-center gap-3">
+      <header className="flex items-center justify-between gap-3 px-3 py-3 sm:px-6 sm:py-4 border-b border-[#222] bg-[#0c0c0c] z-10">
+        <div className="flex min-w-0 items-center gap-3">
           <Icon icon="mdi:translate" className="text-xl text-cyan-500" />
-          <h2 className="text-lg font-bold tracking-tight uppercase font-mono">
+          <h2 className="hidden text-lg font-bold tracking-tight uppercase font-mono sm:block">
             Translation Studio <span className="text-[#555]">{"//"}</span> HITL Review
           </h2>
-          <span className="text-[10px] font-mono bg-cyan-950 text-cyan-400 border border-cyan-800/50 px-2 py-0.5 rounded">
+          <span className="truncate text-[10px] font-mono bg-cyan-950 text-cyan-400 border border-cyan-800/50 px-2 py-0.5 rounded">
             {item.filename}
           </span>
         </div>
@@ -90,62 +115,36 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
       </header>
 
       {/* Main Content Workspace */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
         {/* Left Side: Visual Layout Preview */}
-        <div className="flex-1 bg-[#090909] p-6 flex items-center justify-center relative overflow-hidden">
-          <div className="relative max-w-full max-h-full aspect-[3/4] bg-black border border-[#222] overflow-hidden flex items-center justify-center">
-            <img
-              src={item.originalUrl}
-              alt="Manga Page Visual Context"
-              onLoad={handleImageLoad}
-              className="max-w-full max-h-full object-contain pointer-events-none select-none filter grayscale-[0.3]"
-            />
-
-            {naturalSize.w > 0 && (
-              <svg
-                viewBox={`0 0 ${naturalSize.w} ${naturalSize.h}`}
-                className="absolute inset-0 w-full h-full pointer-events-auto"
-              >
-                {blocks.map(b => (
-                  <g key={b.id}>
-                    <rect
-                      x={b.box.x * naturalSize.w}
-                      y={b.box.y * naturalSize.h}
-                      width={b.box.width * naturalSize.w}
-                      height={b.box.height * naturalSize.h}
-                      className={`fill-cyan-500/5 stroke-2 cursor-pointer transition-all duration-300 hover:fill-cyan-500/20 ${
-                        selectedBlockId === b.id
-                          ? 'stroke-yellow-400 fill-cyan-500/10 stroke-[3px]'
-                          : 'stroke-cyan-500'
-                      }`}
-                      onClick={() => {
-                        setSelectedBlockId(b.id);
-                        const el = document.getElementById(`segment-${b.id}`);
-                        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                      }}
-                    />
-                    <text
-                      x={b.box.x * naturalSize.w + 5}
-                      y={b.box.y * naturalSize.h + 15}
-                      className="fill-black bg-cyan-400 px-1 font-mono text-[8px] font-bold select-none pointer-events-none"
-                    >
-                      {blocks.indexOf(b) + 1}
-                    </text>
-                  </g>
-                ))}
-              </svg>
-            )}
-          </div>
+        <div className="min-h-0 flex-1 overflow-hidden">
+          <RegionCanvas
+            imageUrl={item.originalUrl}
+            blocks={blocks}
+            selectedBlockId={selectedBlockId}
+            disabled={isSavingRegions || isSubmitting}
+            onChange={setBlocks}
+            onCommit={handleRegionCommit}
+            onSelect={blockId => {
+              setSelectedBlockId(blockId);
+              if (blockId) {
+                document.getElementById(`segment-${blockId}`)?.scrollIntoView({
+                  behavior: 'smooth',
+                  block: 'center',
+                });
+              }
+            }}
+          />
         </div>
 
         {/* Right Side: Translation Segments Editor */}
-        <div className="w-[480px] border-l border-[#222] bg-[#0c0c0c] flex flex-col overflow-hidden">
+        <div className="h-[45%] w-full border-t border-[#222] bg-[#0c0c0c] flex flex-col overflow-hidden lg:h-auto lg:w-[480px] lg:border-l lg:border-t-0">
           <div className="p-4 border-b border-[#222] bg-[#0e0e0e] flex items-center justify-between">
             <span className="font-mono text-xs text-[#666] uppercase tracking-widest font-bold">
               Segments & Tone Gates
             </span>
             <span className="text-[10px] font-mono text-cyan-500 uppercase tracking-widest">
-              {blocks.length} Bubbles Detected
+              {isSavingRegions ? 'Saving layout…' : `${blocks.length} Regions`}
             </span>
           </div>
 
@@ -229,9 +228,16 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
               </div>
             )}
 
+            {regionError && (
+              <div role="alert" className="p-3 bg-red-500/10 border border-red-500/30 text-red-400 text-xs flex items-center gap-2">
+                <Icon icon="mdi:alert" className="text-base" />
+                <span>{regionError}</span>
+              </div>
+            )}
+
             <button
               onClick={handleApprove}
-              disabled={isSubmitting}
+              disabled={isSubmitting || isSavingRegions}
               className="w-full flex items-center justify-center gap-2 py-3 bg-cyan-500 hover:bg-cyan-400 disabled:bg-[#222] text-black font-bold uppercase tracking-widest font-mono transition-colors shadow-lg shadow-cyan-500/20 disabled:shadow-none"
             >
               {isSubmitting ? (
