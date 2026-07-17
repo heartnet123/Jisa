@@ -1,6 +1,7 @@
 import axios from "axios";
 import type {
   BlockItem,
+  MaskPreviewResponse,
   ProcessedManga,
   Project,
   RegionCollectionResponse,
@@ -61,6 +62,7 @@ export const mangaApi = {
       originalUrl: originalUrl ?? "",
       result_url: resolveUrl(data.result_url),
       inpainted_url: resolveUrl(data.inpainted_url),
+      mask_preview_url: resolveUrl(data.mask_preview_url),
       status: (data.status as unknown as string) === "processing" ? "segmenting" : data.status,
     };
   },
@@ -106,6 +108,23 @@ export const mangaApi = {
     return response.data;
   },
 
+  rerunRegionOcr: async (jobId: string, regionId: string): Promise<BlockItem> => {
+    const response = await axios.post<BlockItem>(
+      `${API_BASE_URL}/api/jobs/${jobId}/regions/${regionId}/ocr`,
+    );
+    return response.data;
+  },
+
+  generateMaskPreview: async (jobId: string): Promise<MaskPreviewResponse> => {
+    const response = await axios.post<MaskPreviewResponse>(
+      `${API_BASE_URL}/api/jobs/${jobId}/mask-preview`,
+    );
+    return {
+      ...response.data,
+      url: resolveUrl(response.data.url) ?? response.data.url,
+    };
+  },
+
   listJobs: async (): Promise<ProcessedManga[]> => {
     const response = await axios.get<ProcessedManga[]>(
       `${API_BASE_URL}/api/jobs`
@@ -115,6 +134,7 @@ export const mangaApi = {
       originalUrl: resolveUrl(job.originalUrl) ?? resolveUrl(job.original_url) ?? "",
       result_url: resolveUrl(job.result_url),
       inpainted_url: resolveUrl(job.inpainted_url),
+      mask_preview_url: resolveUrl(job.mask_preview_url),
     }));
   },
 

@@ -33,6 +33,11 @@ export interface RegionCollectionResponse {
   regions: BlockItem[];
 }
 
+export interface MaskPreviewResponse {
+  url: string;
+  revision: number;
+}
+
 export interface ProcessedManga {
   id: string;
   filename: string;
@@ -49,6 +54,8 @@ export interface ProcessedManga {
   blocks?: BlockItem[];
   project_id?: string;
   region_mode?: "detected" | "manual_override";
+  mask_preview_url?: string;
+  preview_revision?: number;
 }
 
 export interface TranslationConfig {

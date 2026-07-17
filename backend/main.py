@@ -455,6 +455,8 @@ class JobStatus(BaseModel):
     blocks: List[BlockItem] | None = None
     project_id: str | None = None
     region_mode: Literal["detected", "manual_override"] = "detected"
+    mask_preview_url: str | None = None
+    preview_revision: int = 0
 
 
 class ProjectCreatePayload(BaseModel):

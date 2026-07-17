@@ -55,10 +55,16 @@ interface RegionCanvasProps {
   blocks: BlockItem[];
   selectedBlockId: string | null;
   disabled?: boolean;
+  maskPreviewUrl?: string;
+  maskPreviewState?: MaskPreviewState;
+  showMaskPreview?: boolean;
   onChange: (blocks: BlockItem[]) => void;
   onCommit: (blocks: BlockItem[]) => void;
   onSelect: (blockId: string | null) => void;
+  onToggleMaskPreview?: () => void;
 }
+
+export type MaskPreviewState = "idle" | "loading" | "ready" | "stale" | "error";
 
 interface RegionShapeProps {
   block: BlockItem;
@@ -216,9 +222,13 @@ export function RegionCanvas({
   blocks,
   selectedBlockId,
   disabled = false,
+  maskPreviewUrl,
+  maskPreviewState = "idle",
+  showMaskPreview = false,
   onChange,
   onCommit,
   onSelect,
+  onToggleMaskPreview,
 }: RegionCanvasProps) {
   const [addMode, setAddMode] = useState(false);
   const [draftBox, setDraftBox] = useState<NormalizedBox | null>(null);
@@ -429,6 +439,28 @@ export function RegionCanvas({
           <Icon icon="mdi:trash-can-outline" />
           Delete
         </button>
+        <button
+          type="button"
+          aria-pressed={showMaskPreview}
+          disabled={disabled || maskPreviewState === "loading"}
+          onClick={onToggleMaskPreview}
+          className="flex min-h-10 items-center gap-2 border border-[#333] px-3 font-mono text-[11px] font-bold uppercase tracking-wider text-yellow-300 transition-colors hover:border-yellow-400 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <Icon
+            icon={
+              maskPreviewState === "loading"
+                ? "eos-icons:loading"
+                : showMaskPreview
+                  ? "mdi:eye-off-outline"
+                  : "mdi:eye-outline"
+            }
+          />
+          {maskPreviewState === "stale"
+            ? "Regenerate mask"
+            : showMaskPreview
+              ? "Hide mask"
+              : "Mask preview"}
+        </button>
         <p className="ml-auto text-[10px] font-mono uppercase tracking-wider text-[#666]">
           {addMode ? "Drag an empty area to create" : "Drag a region or its corner handles"}
         </p>
@@ -443,6 +475,15 @@ export function RegionCanvas({
             draggable={false}
             className="block max-h-[calc(100dvh-13rem)] max-w-full select-none object-contain lg:max-h-[calc(100dvh-9rem)]"
           />
+          {showMaskPreview && maskPreviewUrl ? (
+            <img
+              src={maskPreviewUrl}
+              alt=""
+              aria-hidden="true"
+              draggable={false}
+              className="pointer-events-none absolute inset-0 h-full w-full select-none"
+            />
+          ) : null}
           <svg
             viewBox="0 0 100 100"
             preserveAspectRatio="none"
