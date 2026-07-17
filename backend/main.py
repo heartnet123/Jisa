@@ -238,7 +238,7 @@ def _persist_runtime_regions(job_id: str, blocks: List[TextBlock]) -> None:
     for order, block in enumerate(blocks):
         prior = existing.get(block.id)
         mask_path = prior.mask_path if prior else None
-        if block.mask is not None:
+        if block.mask is not None and (prior is None or prior.source == "detected"):
             candidate = _mask_path_for(job_id, block.id)
             if not cv2.imwrite(str(candidate), (block.mask > 0).astype(np.uint8) * 255):
                 raise RuntimeError(f"Failed to persist detected mask for block {block.id}")
@@ -288,33 +288,54 @@ def _public_regions(job_id: str) -> list[dict]:
     return [_public_region(region) for region in repository.load_regions(job_id)]
 
 
-def _hydrate_job_regions(job: dict) -> None:
-    image_width = job.get("image_width")
-    image_height = job.get("image_height")
-    if not image_width or not image_height:
-        return
+def hydrate_engine_blocks(
+    job: dict, regions: list[RegionRecord] | None = None
+) -> list[TextBlock]:
+    image_width = int(job.get("image_width") or 0)
+    image_height = int(job.get("image_height") or 0)
+    if image_width <= 0 or image_height <= 0:
+        return []
 
+    durable_regions = regions if regions is not None else repository.load_regions(job["id"])
     blocks: list[TextBlock] = []
-    public_blocks: list[dict] = []
-    for region in repository.load_regions(job["id"]):
+    for region in durable_regions:
         box = normalized_box_to_pixels(
             (region.x, region.y, region.width, region.height),
             image_width,
             image_height,
         )
         mask = None
-        if region.mask_path:
+        if region.source == "detected" and region.mask_path:
             loaded = cv2.imread(region.mask_path, cv2.IMREAD_GRAYSCALE)
             if loaded is not None and loaded.shape == (image_height, image_width):
                 mask = (loaded > 0).astype(np.uint8)
-        block = TextBlock(
-            id=region.id,
-            box=box,
-            text=region.source_text,
-            translated_text=region.translated_text,
-            mask=mask,
+        if mask is None:
+            mask = np.zeros((image_height, image_width), dtype=np.uint8)
+            x, y, width, height = box
+            mask[y : y + height, x : x + width] = 1
+
+        blocks.append(
+            TextBlock(
+                id=region.id,
+                box=box,
+                text=region.source_text,
+                translated_text=region.translated_text,
+                mask=mask,
+            )
         )
-        blocks.append(block)
+    return blocks
+
+
+def _hydrate_job_regions(job: dict) -> None:
+    image_width = job.get("image_width")
+    image_height = job.get("image_height")
+    if not image_width or not image_height:
+        return
+
+    regions = repository.load_regions(job["id"])
+    blocks = hydrate_engine_blocks(job, regions)
+    public_blocks: list[dict] = []
+    for region in regions:
         public_blocks.append(_public_region(region))
 
     job["blocks_obj"] = blocks
@@ -657,9 +678,13 @@ async def process_manga_task(job_id: str, image_path: str):
         jobs_db[job_id]["message"] = "Detecting speech bubbles."
         await notify_state_change()
 
-        blocks = segmenter.detect_bubbles(img_rgb)
+        manual_override = jobs_db[job_id].get("region_mode") == "manual_override"
+        if manual_override:
+            blocks = hydrate_engine_blocks(jobs_db[job_id])
+        else:
+            blocks = segmenter.detect_bubbles(img_rgb)
 
-        if not blocks:
+        if not blocks and not manual_override:
             print(
                 f"[job {job_id}] WARNING: YOLO detected 0 bubbles. "
                 "Check that the manga-text YOLO weights loaded correctly. "
@@ -684,7 +709,7 @@ async def process_manga_task(job_id: str, image_path: str):
             # Assign extracted text back to each block
             for block, raw_text in zip(blocks, bubble_texts):
                 block.text = raw_text.strip()
-        else:
+        elif not manual_override:
             # No bubbles detected — fall back to full-page OCR
             full_ocr = await perform_ocr(image_path)
             bubble_texts = [full_ocr]
@@ -766,9 +791,17 @@ async def process_manga_task(job_id: str, image_path: str):
 
 
 
-async def resume_manga_task(job_id: str, image_path: str, blocks: List[TextBlock]):
+async def resume_manga_task(
+    job_id: str, image_path: str, blocks: List[TextBlock] | None = None
+):
     """Real AI Pipeline Step 4-6: Inpainting -> Typesetting -> Completed"""
     try:
+        durable_blocks = hydrate_engine_blocks(jobs_db.get(job_id, {}))
+        if durable_blocks or repository.load_regions(job_id):
+            blocks = durable_blocks
+        elif blocks is None:
+            blocks = []
+
         # Load image once for all steps
         img = cv2.imread(image_path)
         if img is None:
@@ -1104,8 +1137,10 @@ async def approve_job(
             status_code=400, detail="Job is not in awaiting_review status"
         )
 
-    # Update translations in blocks_obj
-    blocks = job.get("blocks_obj", [])
+    # Hydrate current geometry and masks from durable state before approval.
+    blocks = hydrate_engine_blocks(job)
+    if not blocks and not repository.load_regions(job_id):
+        blocks = job.get("blocks_obj", [])
     for b in blocks:
         if b.id in payload.translations:
             b.translated_text = payload.translations[b.id]
@@ -1122,6 +1157,8 @@ async def approve_job(
     ]
     if job.get("image_width") and job.get("image_height"):
         _persist_runtime_regions(job_id, blocks)
+        blocks = hydrate_engine_blocks(job)
+        job["blocks_obj"] = blocks
 
     # Update status and progress
     job["status"] = "inpainting"
@@ -1132,7 +1169,7 @@ async def approve_job(
     filename = Path(job["original_url"]).name
     file_path = UPLOAD_DIR / filename
 
-    background_tasks.add_task(resume_manga_task, job_id, str(file_path), blocks)
+    background_tasks.add_task(resume_manga_task, job_id, str(file_path))
     await notify_state_change()
 
     return {"status": "resumed"}
