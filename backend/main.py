@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from job_errors import OcrError, ocr_failure_message
+from repository import RegionRecord, ReviewRepository, SQLiteReviewRepository
 from synthesis.inpainting import InpaintingEngine
 from synthesis.segmentation import TextBlock, SegmentationEngine
 from synthesis.typesetting import TypesetBlock, TypesettingEngine
@@ -106,6 +107,9 @@ TYPESETTING_FONT = os.getenv("TYPESETTING_FONT")
 
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+MASK_DIR = UPLOAD_DIR / "masks"
+MASK_DIR.mkdir(parents=True, exist_ok=True)
+STATE_DB_PATH = Path(os.getenv("STATE_DB_PATH", str(UPLOAD_DIR / "state.sqlite3")))
 ALLOWED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 ALLOWED_IMAGE_CONTENT_TYPES = {
     "image/png",
@@ -122,6 +126,7 @@ app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 # In-memory store
 jobs_db: Dict[str, dict] = {}
 projects_db: Dict[str, dict] = {}
+repository: ReviewRepository = SQLiteReviewRepository(STATE_DB_PATH)
 
 # Initialize Synthesis Engines
 segmenter = SegmentationEngine(device=DEVICE)
@@ -162,6 +167,144 @@ def _to_public_url(path: Path | str | None) -> str | None:
 
 def _status_for_api(status: str) -> str:
     return status if status != "failed" else "error"
+
+
+def set_repository(new_repository: ReviewRepository, *, hydrate: bool = False) -> None:
+    """Replace durable storage without invalidating the runtime cache contract."""
+    global repository
+    repository = new_repository
+    if hydrate:
+        hydrate_repository_state()
+
+
+def _pixel_box_to_normalized(
+    box: tuple[int, int, int, int], image_width: int, image_height: int
+) -> tuple[float, float, float, float]:
+    x, y, width, height = box
+    return (
+        x / image_width,
+        y / image_height,
+        width / image_width,
+        height / image_height,
+    )
+
+
+def _normalized_box_to_pixels(
+    region: RegionRecord, image_width: int, image_height: int
+) -> tuple[int, int, int, int]:
+    x = min(image_width - 1, max(0, round(region.x * image_width)))
+    y = min(image_height - 1, max(0, round(region.y * image_height)))
+    width = max(1, round(region.width * image_width))
+    height = max(1, round(region.height * image_height))
+    width = min(width, image_width - x)
+    height = min(height, image_height - y)
+    return x, y, width, height
+
+
+def _mask_path_for(job_id: str, block_id: str) -> Path:
+    safe_block_id = re.sub(r"[^A-Za-z0-9._-]+", "_", block_id)
+    return MASK_DIR / f"{job_id}_{safe_block_id}.png"
+
+
+def _persist_runtime_regions(job_id: str, blocks: List[TextBlock]) -> None:
+    job = jobs_db[job_id]
+    image_width = int(job["image_width"])
+    image_height = int(job["image_height"])
+    existing = {region.id: region for region in repository.load_regions(job_id)}
+    regions: list[RegionRecord] = []
+
+    for order, block in enumerate(blocks):
+        prior = existing.get(block.id)
+        mask_path = prior.mask_path if prior else None
+        if block.mask is not None:
+            candidate = _mask_path_for(job_id, block.id)
+            if not cv2.imwrite(str(candidate), (block.mask > 0).astype(np.uint8) * 255):
+                raise RuntimeError(f"Failed to persist detected mask for block {block.id}")
+            mask_path = str(candidate)
+
+        x, y, width, height = _pixel_box_to_normalized(
+            block.box, image_width, image_height
+        )
+        regions.append(
+            RegionRecord(
+                id=block.id,
+                job_id=job_id,
+                order=order,
+                x=x,
+                y=y,
+                width=width,
+                height=height,
+                source=prior.source if prior else "detected",
+                source_text=block.text,
+                translated_text=block.translated_text,
+                mask_path=mask_path,
+            )
+        )
+
+    repository.save_job(job)
+    repository.replace_regions(job_id, regions)
+
+
+def _hydrate_job_regions(job: dict) -> None:
+    image_width = job.get("image_width")
+    image_height = job.get("image_height")
+    if not image_width or not image_height:
+        return
+
+    blocks: list[TextBlock] = []
+    public_blocks: list[dict] = []
+    for region in repository.load_regions(job["id"]):
+        box = _normalized_box_to_pixels(region, image_width, image_height)
+        mask = None
+        if region.mask_path:
+            loaded = cv2.imread(region.mask_path, cv2.IMREAD_GRAYSCALE)
+            if loaded is not None and loaded.shape == (image_height, image_width):
+                mask = (loaded > 0).astype(np.uint8)
+        block = TextBlock(
+            id=region.id,
+            box=box,
+            text=region.source_text,
+            translated_text=region.translated_text,
+            mask=mask,
+        )
+        blocks.append(block)
+        public_blocks.append(
+            {
+                "id": region.id,
+                "box": list(box),
+                "text": region.source_text,
+                "translated_text": region.translated_text,
+            }
+        )
+
+    job["blocks_obj"] = blocks
+    job["blocks"] = public_blocks
+
+
+def hydrate_repository_state() -> None:
+    interrupted_statuses = {
+        "queued",
+        "segmenting",
+        "ocr",
+        "translating",
+        "inpainting",
+        "typesetting",
+    }
+    jobs_db.clear()
+    projects_db.clear()
+
+    for job in repository.load_jobs():
+        if job["status"] in interrupted_statuses:
+            job["status"] = "failed"
+            job["error"] = "Job interrupted by backend restart."
+            job["message"] = "Job stopped because the backend restarted."
+            job["progress"] = min(int(job.get("progress") or 0), 95)
+            repository.save_job(job)
+        _hydrate_job_regions(job)
+        jobs_db[job["id"]] = job
+
+    for project in repository.load_projects():
+        projects_db[project["id"]] = project
 
 
 class TranslateJobResponse(BaseModel):
@@ -406,6 +549,10 @@ async def process_manga_task(job_id: str, image_path: str):
         if img is None:
             raise RuntimeError(f"cv2.imread failed for {image_path}")
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        image_height, image_width = img_rgb.shape[:2]
+        jobs_db[job_id]["image_width"] = image_width
+        jobs_db[job_id]["image_height"] = image_height
+        jobs_db[job_id].setdefault("region_mode", "detected")
 
         # ── Step 1: Segmentation ─────────────────────────────────────────────
         if job_id not in jobs_db or jobs_db[job_id]["status"] == "canceled":
@@ -507,6 +654,7 @@ async def process_manga_task(job_id: str, image_path: str):
         jobs_db[job_id]["status"] = "awaiting_review"
         jobs_db[job_id]["progress"] = 55
         jobs_db[job_id]["message"] = "Awaiting manual review of translations."
+        _persist_runtime_regions(job_id, blocks)
         await notify_state_change()
 
 
@@ -682,6 +830,7 @@ async def translate_manga(
         "message": "Queued for translation.",
         "original_url": _to_public_url(file_path),
         "project_id": project_id,
+        "region_mode": "detected",
     }
 
     if project_id and project_id in projects_db:
@@ -736,6 +885,8 @@ async def approve_job(
         }
         for b in blocks
     ]
+    if job.get("image_width") and job.get("image_height"):
+        _persist_runtime_regions(job_id, blocks)
 
     # Update status and progress
     job["status"] = "inpainting"
@@ -888,6 +1039,7 @@ async def delete_project(project_id: str):
             jobs_db[job_id]["project_id"] = None
             
     del projects_db[project_id]
+    repository.delete_project(project_id)
     await notify_state_change()
     return {"status": "deleted", "project_id": project_id}
 
@@ -920,8 +1072,19 @@ async def delete_job(job_id: str):
             projects_db[project_id]["job_ids"].remove(job_id)
         if "page_order" in projects_db[project_id] and job_id in projects_db[project_id]["page_order"]:
             projects_db[project_id]["page_order"].remove(job_id)
-            
+
+    for region in repository.load_regions(job_id):
+        if region.mask_path:
+            try:
+                Path(region.mask_path).unlink(missing_ok=True)
+            except OSError as exc:
+                print(f"Error deleting mask {region.mask_path}: {exc}")
+    preview_url = job.get("mask_preview_url")
+    if preview_url and preview_url.startswith("/uploads/"):
+        (UPLOAD_DIR / preview_url.removeprefix("/uploads/")).unlink(missing_ok=True)
+
     del jobs_db[job_id]
+    repository.delete_job(job_id)
     await notify_state_change()
     return {"status": "deleted", "job_id": job_id}
 
@@ -990,6 +1153,11 @@ async def get_system_health():
 
 async def notify_state_change():
     try:
+        for job in jobs_db.values():
+            repository.save_job(job)
+        for project in projects_db.values():
+            repository.save_project(project)
+
         jobs = await list_jobs()
         await event_manager.publish("jobs", jobs)
         health = await get_system_health()
@@ -1008,6 +1176,8 @@ async def notify_state_change():
 
 @app.on_event("startup")
 async def startup_event():
+    hydrate_repository_state()
+
     async def periodic_health_broadcast():
         while True:
             try:

@@ -1,21 +1,36 @@
+import tempfile
 import unittest
+from pathlib import Path
+
 from fastapi.testclient import TestClient
+
 import main
+from repository import SQLiteReviewRepository
 
 
 class ProjectSessionWorkflowTests(unittest.TestCase):
     def setUp(self) -> None:
         self._jobs_snapshot = dict(main.jobs_db)
         self._projects_snapshot = dict(main.projects_db)
+        self._repository_snapshot = main.repository
+        self._temporary_directory = tempfile.TemporaryDirectory()
+        self._test_repository = SQLiteReviewRepository(
+            Path(self._temporary_directory.name) / "state.sqlite3"
+        )
+        main.set_repository(self._test_repository)
         main.jobs_db.clear()
         main.projects_db.clear()
         self.client = TestClient(main.app)
 
     def tearDown(self) -> None:
+        self.client.close()
         main.jobs_db.clear()
         main.projects_db.clear()
         main.jobs_db.update(self._jobs_snapshot)
         main.projects_db.update(self._projects_snapshot)
+        self._test_repository.close()
+        main.set_repository(self._repository_snapshot)
+        self._temporary_directory.cleanup()
 
     def test_create_and_list_projects(self) -> None:
         # Create a new project session
