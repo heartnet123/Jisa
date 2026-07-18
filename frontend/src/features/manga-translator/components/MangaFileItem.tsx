@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { Icon } from "@iconify-icon/react";
 import { motion, AnimatePresence } from "framer-motion";
 import { mangaApi } from "../api/mangaApi";
@@ -49,42 +49,6 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
       console.error("Failed to cancel job:", err);
     }
   };
-
-  useEffect(() => {
-    if (
-      item.status === "completed" ||
-      item.status === "uploading" ||
-      item.status === "awaiting_review" ||
-      TERMINAL_ERROR_STATUSES.includes(item.status)
-    ) {
-      return;
-    }
-
-    const poll = async () => {
-      try {
-        const response = await mangaApi.checkStatus(item.id);
-        onUpdate(item.id, {
-          status: response.status,
-          progress: response.progress,
-          result_url: response.result_url,
-          inpainted_url: response.inpainted_url,
-          originalUrl: response.originalUrl,
-          ocr_text: response.ocr_text,
-          translated_text: response.translated_text,
-          error: response.error,
-          message: response.message,
-        });
-      } catch (err) {
-        console.error("Polling error:", err);
-      }
-    };
-
-    const interval = setInterval(() => {
-      poll();
-    }, 2000);
-
-    return () => clearInterval(interval);
-  }, [item.id, item.status, onUpdate]);
 
   const activeImage =
     displayMode === "translated"
