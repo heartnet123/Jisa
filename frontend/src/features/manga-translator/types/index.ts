@@ -12,11 +12,30 @@ export type MangaStatus =
   | "canceled"
   | "failed";
 
+export interface NormalizedBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface BlockItem {
   id: string;
-  box: number[];
+  box: NormalizedBox;
+  source: "detected" | "manual";
   text?: string;
   translated_text?: string;
+  mask_available?: boolean;
+}
+
+export interface RegionCollectionResponse {
+  region_mode: "detected" | "manual_override";
+  regions: BlockItem[];
+}
+
+export interface MaskPreviewResponse {
+  url: string;
+  revision: number;
 }
 
 export interface ProcessedManga {
@@ -34,6 +53,9 @@ export interface ProcessedManga {
   progress: number;
   blocks?: BlockItem[];
   project_id?: string;
+  region_mode?: "detected" | "manual_override";
+  mask_preview_url?: string;
+  preview_revision?: number;
 }
 
 export interface TranslationConfig {

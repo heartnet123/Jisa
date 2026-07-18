@@ -1,19 +1,32 @@
+import tempfile
 import unittest
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 import main
+from repository import RegionRecord, SQLiteReviewRepository
 
 
 class ApiResponseModelTests(unittest.TestCase):
     def setUp(self) -> None:
         self._jobs_snapshot = dict(main.jobs_db)
+        self._repository_snapshot = main.repository
+        self._temporary_directory = tempfile.TemporaryDirectory()
+        self._test_repository = SQLiteReviewRepository(
+            Path(self._temporary_directory.name) / "state.sqlite3"
+        )
+        main.set_repository(self._test_repository)
         main.jobs_db.clear()
         self.client = TestClient(main.app)
 
     def tearDown(self) -> None:
+        self.client.close()
         main.jobs_db.clear()
         main.jobs_db.update(self._jobs_snapshot)
+        self._test_repository.close()
+        main.set_repository(self._repository_snapshot)
+        self._temporary_directory.cleanup()
 
     def test_openapi_documents_translate_and_status_response_models(self) -> None:
         response = self.client.get("/openapi.json")
@@ -40,9 +53,67 @@ class ApiResponseModelTests(unittest.TestCase):
         self.assertIn("original_url", schemas["JobStatus"]["properties"])
         self.assertIn("result_url", schemas["JobStatus"]["properties"])
         self.assertIn("error", schemas["JobStatus"]["properties"])
+        self.assertEqual(
+            schemas["BlockItem"]["properties"]["box"]["$ref"],
+            "#/components/schemas/NormalizedBox",
+        )
+        normalized_box = schemas["NormalizedBox"]["properties"]
+        self.assertEqual(set(normalized_box), {"x", "y", "width", "height"})
         self.assertNotIn("ocr_text", schemas["JobStatus"]["properties"])
         self.assertNotIn("translated_text", schemas["JobStatus"]["properties"])
         self.assertNotIn("inpainted_url", schemas["JobStatus"]["properties"])
+
+    def test_hydration_preserves_review_jobs_and_fails_interrupted_jobs(self) -> None:
+        self._test_repository.save_job(
+            {
+                "id": "active-job",
+                "filename": "active.png",
+                "status": "translating",
+                "progress": 50,
+            }
+        )
+        self._test_repository.save_job(
+            {
+                "id": "review-job",
+                "filename": "review.png",
+                "status": "awaiting_review",
+                "progress": 55,
+                "image_width": 200,
+                "image_height": 100,
+            }
+        )
+        self._test_repository.replace_regions(
+            "review-job",
+            [
+                RegionRecord(
+                    id="region-1",
+                    job_id="review-job",
+                    order=0,
+                    x=0.1,
+                    y=0.2,
+                    width=0.3,
+                    height=0.4,
+                    source="detected",
+                    source_text="source",
+                    translated_text="translation",
+                )
+            ],
+        )
+
+        main.hydrate_repository_state()
+
+        self.assertEqual(main.jobs_db["active-job"]["status"], "failed")
+        self.assertEqual(
+            main.jobs_db["active-job"]["error"],
+            "Job interrupted by backend restart.",
+        )
+        review_job = main.jobs_db["review-job"]
+        self.assertEqual(review_job["status"], "awaiting_review")
+        self.assertEqual(
+            review_job["blocks"][0]["box"],
+            {"x": 0.1, "y": 0.2, "width": 0.3, "height": 0.4},
+        )
+        self.assertEqual(review_job["blocks_obj"][0].translated_text, "translation")
 
     def test_status_response_filters_internal_job_fields(self) -> None:
         main.jobs_db["job-1"] = {
@@ -86,7 +157,8 @@ class ApiResponseModelTests(unittest.TestCase):
             "blocks": [
                 {
                     "id": "block-1",
-                    "box": [10, 20, 100, 50],
+                    "box": {"x": 0.1, "y": 0.2, "width": 0.5, "height": 0.5},
+                    "source": "detected",
                     "text": "Japanese",
                     "translated_text": "Thai Translation draft"
                 }
@@ -101,7 +173,10 @@ class ApiResponseModelTests(unittest.TestCase):
         self.assertEqual(body["status"], "awaiting_review")
         self.assertEqual(len(body["blocks"]), 1)
         self.assertEqual(body["blocks"][0]["id"], "block-1")
-        self.assertEqual(body["blocks"][0]["box"], [10, 20, 100, 50])
+        self.assertEqual(
+            body["blocks"][0]["box"],
+            {"x": 0.1, "y": 0.2, "width": 0.5, "height": 0.5},
+        )
         self.assertEqual(body["blocks"][0]["text"], "Japanese")
         self.assertEqual(body["blocks"][0]["translated_text"], "Thai Translation draft")
 
@@ -128,11 +203,14 @@ class ApiResponseModelTests(unittest.TestCase):
             "progress": 55,
             "message": "Awaiting manual review of translations.",
             "original_url": "/uploads/source.png",
+            "image_width": 200,
+            "image_height": 100,
             "blocks_obj": [mock_block],
             "blocks": [
                 {
                     "id": "block-1",
-                    "box": [10, 20, 100, 50],
+                    "box": {"x": 0.05, "y": 0.2, "width": 0.5, "height": 0.5},
+                    "source": "detected",
                     "text": "Japanese",
                     "translated_text": "Thai Draft"
                 }
