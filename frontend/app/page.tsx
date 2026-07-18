@@ -1,9 +1,5 @@
-import { MangaTranslator } from "@/features/manga-translator";
+import { redirect } from 'next/navigation';
 
 export default function Home() {
-  return (
-    <main className="flex min-h-screen flex-col">
-      <MangaTranslator />
-    </main>
-  );
+  redirect('/overview');
 }
