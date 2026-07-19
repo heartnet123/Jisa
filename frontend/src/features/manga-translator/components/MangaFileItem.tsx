@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { Icon } from "@iconify-icon/react";
 import { motion, AnimatePresence } from "framer-motion";
 import { mangaApi } from "../api/mangaApi";
@@ -50,42 +50,6 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
     }
   };
 
-  useEffect(() => {
-    if (
-      item.status === "completed" ||
-      item.status === "uploading" ||
-      item.status === "awaiting_review" ||
-      TERMINAL_ERROR_STATUSES.includes(item.status)
-    ) {
-      return;
-    }
-
-    const poll = async () => {
-      try {
-        const response = await mangaApi.checkStatus(item.id);
-        onUpdate(item.id, {
-          status: response.status,
-          progress: response.progress,
-          result_url: response.result_url,
-          inpainted_url: response.inpainted_url,
-          originalUrl: response.originalUrl,
-          ocr_text: response.ocr_text,
-          translated_text: response.translated_text,
-          error: response.error,
-          message: response.message,
-        });
-      } catch (err) {
-        console.error("Polling error:", err);
-      }
-    };
-
-    const interval = setInterval(() => {
-      poll();
-    }, 2000);
-
-    return () => clearInterval(interval);
-  }, [item.id, item.status, onUpdate]);
-
   const activeImage =
     displayMode === "translated"
       ? item.result_url || item.originalUrl
@@ -127,8 +91,12 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
               className={cn(
                 "flex items-center gap-2 px-3 py-1 bg-[#1a1a1a] rounded-full border border-[#333] transition-all",
                 item.status === "completed" &&
-                  "border-green-500/50 bg-green-500/5 text-green-500",
-                hasError && "border-red-500/50 bg-red-500/5 text-red-500",
+                  "border-green-500/50 bg-green-500/5 text-green-400",
+                item.status === "awaiting_review" &&
+                  "border-yellow-500/50 bg-yellow-500/5 text-yellow-400 shadow-[0_0_10px_rgba(234,179,8,0.1)]",
+                hasError && "border-red-500/50 bg-red-500/5 text-red-400",
+                !["completed", "awaiting_review"].includes(item.status) && !hasError &&
+                  "border-cyan-500/50 bg-cyan-500/5 text-cyan-400",
               )}
             >
               <span
@@ -136,13 +104,15 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
                   "w-1.5 h-1.5 rounded-full",
                   item.status === "completed"
                     ? "bg-green-500"
-                    : hasError
-                      ? "bg-red-500"
-                      : "bg-cyan-500 animate-pulse",
+                    : item.status === "awaiting_review"
+                      ? "bg-yellow-500 animate-pulse shadow-[0_0_8px_#eab308]"
+                      : hasError
+                        ? "bg-red-500"
+                        : "bg-cyan-500 animate-pulse",
                 )}
               />
               <span className="text-[10px] font-black uppercase tracking-[0.2em]">
-                {item.status}
+                {item.status === "awaiting_review" ? "needs review" : item.status}
               </span>
             </div>
             <div className="flex gap-2">

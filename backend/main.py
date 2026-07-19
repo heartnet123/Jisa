@@ -926,6 +926,27 @@ async def check_ollama():
         return {"status": "disconnected"}
 
 
+def _verify_image_signature(content: bytes) -> bool:
+    if len(content) < 8:
+        return False
+    # PNG: \x89PNG\r\n\x1a\n
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return True
+    # JPEG: \xff\xd8\xff
+    if content.startswith(b"\xff\xd8\xff"):
+        return True
+    # WEBP: RIFF....WEBP
+    if content.startswith(b"RIFF") and content[8:12] == b"WEBP":
+        return True
+    # BMP: BM
+    if content.startswith(b"BM"):
+        return True
+    # TIFF: II*\x00 or MM\x00*
+    if content.startswith(b"II\x2a\x00") or content.startswith(b"MM\x00\x2a"):
+        return True
+    return False
+
+
 @app.post("/api/translate", response_model=TranslateJobResponse, status_code=202)
 async def translate_manga(
     background_tasks: BackgroundTasks,
@@ -951,6 +972,12 @@ async def translate_manga(
         raise HTTPException(
             status_code=413,
             detail=f"File exceeds the {MAX_UPLOAD_SIZE_BYTES // (1024 * 1024)}MB limit",
+        )
+
+    if not _verify_image_signature(content):
+        raise HTTPException(
+            status_code=415,
+            detail="Unsupported media type: invalid image signature",
         )
 
     with open(file_path, "wb") as buffer:
@@ -1547,23 +1574,29 @@ async def get_system_health():
     }
 
 
-async def notify_state_change():
+async def notify_state_change(job_ids: list[str] | str | None = None, project_ids: list[str] | str | None = None):
     try:
-        for job in jobs_db.values():
-            repository.save_job(job)
-        for project in projects_db.values():
-            repository.save_project(project)
+        # ponytail: prevent quadratic write amplification by only saving explicitly updated entities
+        if job_ids:
+            jids = [job_ids] if isinstance(job_ids, str) else job_ids
+            for jid in jids:
+                if jid in jobs_db:
+                    repository.save_job(jobs_db[jid])
+        if project_ids:
+            pids = [project_ids] if isinstance(project_ids, str) else project_ids
+            for pid in pids:
+                if pid in projects_db:
+                    repository.save_project(projects_db[pid])
+
+        # Ensure page_order is present defensively before publishing
+        for proj in projects_db.values():
+            if "page_order" not in proj:
+                proj["page_order"] = list(proj["job_ids"])
 
         jobs = await list_jobs()
         await event_manager.publish("jobs", jobs)
         health = await get_system_health()
         await event_manager.publish("health", health)
-        
-        # Ensure page_order is present defensively before publishing
-        for proj in projects_db.values():
-            if "page_order" not in proj:
-                proj["page_order"] = list(proj["job_ids"])
-                
         projects = list(projects_db.values())[::-1]
         await event_manager.publish("projects", projects)
     except Exception as e:
