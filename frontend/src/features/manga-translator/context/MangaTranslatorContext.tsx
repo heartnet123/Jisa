@@ -21,6 +21,10 @@ interface MangaTranslatorContextType {
   setIsDragging: (dragging: boolean) => void;
   config: TranslationConfig;
   setConfig: React.Dispatch<React.SetStateAction<TranslationConfig>>;
+  sseStatus: 'connected' | 'reconnecting' | 'error';
+  bootstrapError: string | null;
+  activeUploadCount: number;
+
   
   // Sandbox states
   sandboxText: string;
@@ -40,6 +44,7 @@ interface MangaTranslatorContextType {
   handleUpdate: (id: string, updates: Partial<ProcessedManga>) => void;
   handleRemove: (id: string) => Promise<void>;
   handleMovePage: (projectId: string, jobId: string, direction: 'up' | 'down') => Promise<void>;
+  handleMovePageTo: (projectId: string, jobId: string, targetPosition: number) => Promise<void>;
   handleRenameProject: (projectId: string, newName: string) => Promise<void>;
   handleDeleteProject: (projectId: string) => Promise<void>;
   runSandboxTest: () => Promise<void>;
@@ -62,6 +67,14 @@ export const MangaTranslatorProvider: React.FC<{ children: React.ReactNode }> = 
   const [isUploading, setIsUploading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [activeHITLItem, setActiveHITLItem] = useState<ProcessedManga | null>(null);
+  const [sseStatus, setSseStatus] = useState<'connected' | 'reconnecting' | 'error'>('connected');
+  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
+  const [activeUploadCount, setActiveUploadCount] = useState(0);
+
+  useEffect(() => {
+    setIsUploading(activeUploadCount > 0);
+  }, [activeUploadCount]);
+
 
   const [config, setConfig] = useState<TranslationConfig>({
     provider: 'openai',
@@ -77,11 +90,16 @@ export const MangaTranslatorProvider: React.FC<{ children: React.ReactNode }> = 
   const [sandboxTime, setSandboxTime] = useState<number | null>(null);
 
   const loadInitialData = useCallback(async () => {
+    setBootstrapError(null);
+    let failed = false;
+    let errMsg = '';
     try {
       const allJobs = await mangaApi.listJobs();
       setFiles(allJobs);
     } catch (err) {
       console.error('Failed to load jobs list:', err);
+      failed = true;
+      errMsg += 'Failed to load jobs. ';
     }
 
     try {
@@ -89,6 +107,8 @@ export const MangaTranslatorProvider: React.FC<{ children: React.ReactNode }> = 
       setProjects(allProjects);
     } catch (err) {
       console.error('Failed to load projects list:', err);
+      failed = true;
+      errMsg += 'Failed to load projects. ';
     }
     
     try {
@@ -103,10 +123,17 @@ export const MangaTranslatorProvider: React.FC<{ children: React.ReactNode }> = 
       }
     } catch (err) {
       console.error('Failed to load system health:', err);
+      failed = true;
+      errMsg += 'Failed to load health status.';
     } finally {
       setHealthLoading(false);
     }
+
+    if (failed) {
+      setBootstrapError(errMsg);
+    }
   }, []);
+
 
   useEffect(() => {
     loadInitialData();
@@ -122,6 +149,10 @@ export const MangaTranslatorProvider: React.FC<{ children: React.ReactNode }> = 
       return url;
     };
 
+    eventSource.onopen = () => {
+      setSseStatus('connected');
+    };
+
     eventSource.addEventListener('jobs', (event) => {
       try {
         const allJobs = JSON.parse(event.data) as ProcessedManga[];
@@ -133,8 +164,9 @@ export const MangaTranslatorProvider: React.FC<{ children: React.ReactNode }> = 
         }));
 
         setFiles(prev => {
-          const uploadingJobs = prev.filter(f => f.status === 'uploading');
-          return [...uploadingJobs, ...resolvedJobs];
+          const resolvedIds = new Set(resolvedJobs.map(j => j.id));
+          const localJobs = prev.filter(f => !resolvedIds.has(f.id) && (f.status === 'uploading' || f.status === 'failed'));
+          return [...localJobs, ...resolvedJobs];
         });
       } catch (err) {
         console.error('Error parsing jobs from SSE:', err);
@@ -168,6 +200,7 @@ export const MangaTranslatorProvider: React.FC<{ children: React.ReactNode }> = 
 
     eventSource.onerror = (err) => {
       console.error('SSE Connection failed/reconnecting:', err);
+      setSseStatus('reconnecting');
       setHealthLoading(true);
     };
 
@@ -177,7 +210,7 @@ export const MangaTranslatorProvider: React.FC<{ children: React.ReactNode }> = 
   }, []);
 
   const uploadBatch = useCallback(async (fileList: File[], projectId?: string) => {
-    setIsUploading(true);
+    setActiveUploadCount(prev => prev + fileList.length);
 
     const uploads = fileList.map(async (file) => {
       const localUrl = URL.createObjectURL(file);
@@ -228,11 +261,12 @@ export const MangaTranslatorProvider: React.FC<{ children: React.ReactNode }> = 
               }
             : f,
         ));
+      } finally {
+        setActiveUploadCount(prev => Math.max(0, prev - 1));
       }
     });
 
     await Promise.all(uploads);
-    setIsUploading(false);
     
     try {
       const health = await mangaApi.getSystemHealth();
@@ -300,6 +334,37 @@ export const MangaTranslatorProvider: React.FC<{ children: React.ReactNode }> = 
     } else {
       return;
     }
+    
+    try {
+      const updatedProj = await mangaApi.reorderProjectPages(projectId, order);
+      setProjects(prev => prev.map(p => p.id === projectId ? { ...p, page_order: updatedProj.page_order, job_ids: updatedProj.job_ids } : p));
+    } catch (err) {
+      console.error('Failed to reorder project pages:', err);
+    }
+  }, [projects, files]);
+
+  const handleMovePageTo = useCallback(async (projectId: string, jobId: string, targetPosition: number) => {
+    const proj = projects.find(p => p.id === projectId);
+    if (!proj) return;
+    
+    const projJobs = files.filter(f => f.project_id === projectId);
+    const order = proj.page_order && proj.page_order.length > 0
+      ? [...proj.page_order]
+      : projJobs.map(f => f.id);
+      
+    projJobs.forEach(job => {
+      if (!order.includes(job.id)) {
+        order.push(job.id);
+      }
+    });
+    
+    const index = order.indexOf(jobId);
+    if (index === -1) return;
+    
+    order.splice(index, 1);
+    
+    const targetIdx = Math.max(0, Math.min(order.length, targetPosition - 1));
+    order.splice(targetIdx, 0, jobId);
     
     try {
       const updatedProj = await mangaApi.reorderProjectPages(projectId, order);
@@ -392,11 +457,15 @@ export const MangaTranslatorProvider: React.FC<{ children: React.ReactNode }> = 
         handleUpdate,
         handleRemove,
         handleMovePage,
+        handleMovePageTo,
         handleRenameProject,
         handleDeleteProject,
         runSandboxTest,
         activeHITLItem,
         setActiveHITLItem,
+        sseStatus,
+        bootstrapError,
+        activeUploadCount,
       }}
     >
       {children}
