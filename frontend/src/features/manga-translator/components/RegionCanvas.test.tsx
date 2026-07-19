@@ -51,7 +51,7 @@ function renderCanvas({
     />,
   );
 
-  const svg = screen.getByLabelText("Editable manga text regions") as SVGSVGElement;
+  const svg = screen.getByLabelText("Editable manga text regions") as unknown as SVGSVGElement;
   vi.spyOn(svg, "getBoundingClientRect").mockReturnValue(canvasBounds());
   return { onChange, onCommit, onSelect, svg };
 }
