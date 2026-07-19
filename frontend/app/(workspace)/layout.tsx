@@ -9,7 +9,7 @@ import { TranslationEditor } from '@/features/manga-translator/components/Transl
 
 export default function WorkspaceLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const { files, projects, systemHealth, activeHITLItem, setActiveHITLItem, handleUpdate } = useMangaTranslator();
+  const { files, projects, systemHealth, activeHITLItem, setActiveHITLItem, handleUpdate, sseStatus, bootstrapError } = useMangaTranslator();
 
 
 
@@ -82,28 +82,10 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
               )}
             >
               <Icon icon="mdi:view-dashboard-outline" className={cn("text-lg", isLinkActive('/overview') ? "text-cyan-400" : "text-[#555]")} />
-              Overview Workspace
+              Overview Statistics
               {activeJobs.length > 0 && (
                 <span className="absolute right-4 w-4 h-4 bg-cyan-500 text-black text-[9px] font-black font-sans rounded-full flex items-center justify-center animate-pulse">
                   {activeJobs.length}
-                </span>
-              )}
-            </Link>
-
-            <Link
-              href="/archive"
-              className={cn(
-                "w-full flex items-center gap-3 px-4 py-3 rounded text-left transition-all duration-300 font-mono text-xs uppercase tracking-wider relative group",
-                isLinkActive('/archive')
-                  ? "bg-[#151b22] text-cyan-400 border border-cyan-500/20 shadow-[0_0_15px_rgba(6,182,212,0.05)]"
-                  : "text-[#888] hover:text-[#eee] hover:bg-[#111]"
-              )}
-            >
-              <Icon icon="mdi:folder-multiple-image" className={cn("text-lg", isLinkActive('/archive') ? "text-cyan-400" : "text-[#555]")} />
-              Archives & Queue
-              {awaitingReviewCount > 0 && (
-                <span className="absolute right-4 px-1.5 py-0.5 bg-yellow-500 text-black text-[8px] font-black font-sans rounded-full flex items-center justify-center animate-bounce shadow-[0_0_8px_#eab308]">
-                  REVIEW
                 </span>
               )}
             </Link>
@@ -122,6 +104,24 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
               {projects.length > 0 && (
                 <span className="absolute right-4 w-4 h-4 bg-cyan-950 text-cyan-400 border border-cyan-800/40 text-[9px] font-black font-sans rounded-full flex items-center justify-center">
                   {projects.length}
+                </span>
+              )}
+            </Link>
+
+            <Link
+              href="/archive"
+              className={cn(
+                "w-full flex items-center gap-3 px-4 py-3 rounded text-left transition-all duration-300 font-mono text-xs uppercase tracking-wider relative group",
+                isLinkActive('/archive')
+                  ? "bg-[#151b22] text-cyan-400 border border-cyan-500/20 shadow-[0_0_15px_rgba(6,182,212,0.05)]"
+                  : "text-[#888] hover:text-[#eee] hover:bg-[#111]"
+              )}
+            >
+              <Icon icon="mdi:folder-multiple-image" className={cn("text-lg", isLinkActive('/archive') ? "text-cyan-400" : "text-[#555]")} />
+              Archives & Queue
+              {awaitingReviewCount > 0 && (
+                <span className="absolute right-4 px-1.5 py-0.5 bg-yellow-500 text-black text-[8px] font-black font-sans rounded-full flex items-center justify-center animate-bounce shadow-[0_0_8px_#eab308]">
+                  REVIEW
                 </span>
               )}
             </Link>
@@ -163,6 +163,18 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
 
       {/* 🖥️ MAIN WORKSPACE VIEWPORT */}
       <main className="flex-1 flex flex-col overflow-hidden bg-[#070707] relative">
+        {sseStatus === 'reconnecting' && (
+          <div role="alert" className="bg-yellow-950/40 border-b border-yellow-500/35 px-8 py-2 text-xs font-mono text-yellow-400 flex items-center gap-2 shrink-0">
+            <Icon icon="eos-icons:loading" className="animate-spin text-sm" />
+            <span>Connection lost. Reconnecting to live update stream...</span>
+          </div>
+        )}
+        {bootstrapError && (
+          <div role="alert" className="bg-red-950/40 border-b border-red-500/35 px-8 py-2 text-xs font-mono text-red-400 flex items-center gap-2 shrink-0">
+            <Icon icon="mdi:alert-circle-outline" className="text-sm" />
+            <span>Failed to bootstrap initial workspace data: {bootstrapError}</span>
+          </div>
+        )}
         {children}
       </main>
 
