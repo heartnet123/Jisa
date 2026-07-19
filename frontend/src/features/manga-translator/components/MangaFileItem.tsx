@@ -91,8 +91,12 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
               className={cn(
                 "flex items-center gap-2 px-3 py-1 bg-[#1a1a1a] rounded-full border border-[#333] transition-all",
                 item.status === "completed" &&
-                  "border-green-500/50 bg-green-500/5 text-green-500",
-                hasError && "border-red-500/50 bg-red-500/5 text-red-500",
+                  "border-green-500/50 bg-green-500/5 text-green-400",
+                item.status === "awaiting_review" &&
+                  "border-yellow-500/50 bg-yellow-500/5 text-yellow-400 shadow-[0_0_10px_rgba(234,179,8,0.1)]",
+                hasError && "border-red-500/50 bg-red-500/5 text-red-400",
+                !["completed", "awaiting_review"].includes(item.status) && !hasError &&
+                  "border-cyan-500/50 bg-cyan-500/5 text-cyan-400",
               )}
             >
               <span
@@ -100,13 +104,15 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
                   "w-1.5 h-1.5 rounded-full",
                   item.status === "completed"
                     ? "bg-green-500"
-                    : hasError
-                      ? "bg-red-500"
-                      : "bg-cyan-500 animate-pulse",
+                    : item.status === "awaiting_review"
+                      ? "bg-yellow-500 animate-pulse shadow-[0_0_8px_#eab308]"
+                      : hasError
+                        ? "bg-red-500"
+                        : "bg-cyan-500 animate-pulse",
                 )}
               />
               <span className="text-[10px] font-black uppercase tracking-[0.2em]">
-                {item.status}
+                {item.status === "awaiting_review" ? "needs review" : item.status}
               </span>
             </div>
             <div className="flex gap-2">
