@@ -48,22 +48,6 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
                 </p>
               </div>
             </div>
-
-            {/* Health Heartbeat Widget */}
-            <div className="mt-6 p-3 bg-[#111] border border-[#222] rounded flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className={cn(
-                  "w-2 h-2 rounded-full",
-                  systemHealth?.ollama?.status === 'connected' ? "bg-green-500 animate-pulse shadow-[0_0_8px_#22c55e]" : "bg-red-500 shadow-[0_0_8px_#ef4444]"
-                )} />
-                <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-[#aaa]">
-                  {systemHealth?.ollama?.status === 'connected' ? "OLLAMA ONLINE" : "OLLAMA OFFLINE"}
-                </span>
-              </div>
-              <span className="text-[9px] font-mono bg-cyan-950 text-cyan-400 border border-cyan-800/40 px-1.5 py-0.5 rounded">
-                {systemHealth?.ollama?.ocr_model || "glm-ocr"}
-              </span>
-            </div>
           </div>
 
           {/* Navigation Commands */}
