@@ -15,7 +15,7 @@ import httpx
 import numpy as np
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile, Form
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -25,6 +25,7 @@ from repository import RegionRecord, ReviewRepository, SQLiteReviewRepository
 from synthesis.inpainting import InpaintingEngine
 from synthesis.segmentation import TextBlock, SegmentationEngine
 from synthesis.typesetting import TypesetBlock, TypesettingEngine
+from byok import BYOKConfig, extract_byok_config, byok_completion, PRESET_PROVIDERS
 
 # Load configurations
 load_dotenv()
@@ -510,35 +511,18 @@ async def perform_ocr(image_path: str) -> str:
         raise OcrError(ocr_failure_message(e)) from e
 
 
-async def translate_text(text: str) -> str:
-    """Call BYOK Translation API"""
-    if not BYOK_API_KEY or BYOK_API_KEY == "your_api_key_here":
-        return f"Translation skipped: BYOK_API_KEY not configured. (Original: {text[:50]}...)"
-
+async def translate_text(text: str, byok_config: BYOKConfig | None = None) -> str:
+    """Call BYOK Translation API via LiteLLM"""
+    config = byok_config or extract_byok_config()
+    messages = [
+        {"role": "system", "content": THAI_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": f"Translate the following manga text to Thai:\n\n{text}",
+        },
+    ]
     try:
-        headers = {
-            "Authorization": f"Bearer {BYOK_API_KEY}",
-            "Content-Type": "application/json",
-        }
-
-        payload = {
-            "model": BYOK_MODEL,
-            "messages": [
-                {"role": "system", "content": THAI_SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": f"Translate the following manga text to Thai:\n\n{text}",
-                },
-            ],
-        }
-
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{BYOK_API_BASE}/chat/completions", headers=headers, json=payload
-            )
-            response.raise_for_status()
-            result = response.json()
-            return result["choices"][0]["message"]["content"]
+        return await byok_completion(messages=messages, config=config)
     except Exception as e:
         print(f"Translation Error: {e}")
         return f"Error during Translation: {str(e)}"
@@ -565,7 +549,7 @@ def _extract_json_object(raw_text: str) -> dict | None:
         return None
 
 
-async def translate_page_texts(texts: List[str]) -> List[str]:
+async def translate_page_texts(texts: List[str], byok_config: BYOKConfig | None = None) -> List[str]:
     """
     Translate all bubble texts together so the model can keep page-level context.
     Falls back to per-bubble mode if structured parsing fails.
@@ -573,49 +557,28 @@ async def translate_page_texts(texts: List[str]) -> List[str]:
     if not texts:
         return []
 
-    if not BYOK_API_KEY or BYOK_API_KEY == "your_api_key_here":
-        return [
-            f"Translation skipped: BYOK_API_KEY not configured. (Original: {text[:50]}...)"
-            for text in texts
-        ]
+    config = byok_config or extract_byok_config()
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                f"{THAI_SYSTEM_PROMPT}\n"
+                "คุณกำลังแปลบทสนทนาในหน้าเดียวกันของมังงะ "
+                "จงคุมโทน น้ำเสียง และสรรพนามให้ต่อเนื่องกันทั้งหน้า "
+                'ตอบกลับเป็น JSON รูปแบบ {"translations":["...", "..."]} '
+                "โดยคงลำดับเดิมและจำนวนรายการต้องเท่ากับ input เท่านั้น"
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(
+                {"bubble_texts": texts},
+                ensure_ascii=False,
+            ),
+        },
+    ]
 
-    headers = {
-        "Authorization": f"Bearer {BYOK_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    page_payload = {
-        "model": BYOK_MODEL,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    f"{THAI_SYSTEM_PROMPT}\n"
-                    "คุณกำลังแปลบทสนทนาในหน้าเดียวกันของมังงะ "
-                    "จงคุมโทน น้ำเสียง และสรรพนามให้ต่อเนื่องกันทั้งหน้า "
-                    'ตอบกลับเป็น JSON รูปแบบ {"translations":["...", "..."]} '
-                    "โดยคงลำดับเดิมและจำนวนรายการต้องเท่ากับ input เท่านั้น"
-                ),
-            },
-            {
-                "role": "user",
-                "content": json.dumps(
-                    {"bubble_texts": texts},
-                    ensure_ascii=False,
-                ),
-            },
-        ],
-    }
-
-    async with httpx.AsyncClient(timeout=45.0) as client:
-        response = await client.post(
-            f"{BYOK_API_BASE}/chat/completions",
-            headers=headers,
-            json=page_payload,
-        )
-        response.raise_for_status()
-        result = response.json()
-        content = result["choices"][0]["message"]["content"]
-
+    content = await byok_completion(messages=messages, config=config)
     payload = _extract_json_object(content)
     if not payload:
         raise ValueError("Batch translation did not return a valid JSON object")
@@ -664,9 +627,12 @@ async def _crop_and_ocr(
     return text
 
 
-async def process_manga_task(job_id: str, image_path: str):
+async def process_manga_task(job_id: str, image_path: str, byok_config: BYOKConfig | None = None):
     """Real AI Pipeline Step 1-3: Segmentation -> OCR (per bubble) -> Translation (Stop for HITL review)"""
     try:
+        if byok_config and job_id in jobs_db:
+            jobs_db[job_id]["byok_config"] = byok_config
+
         # Load image once for all steps
         img = cv2.imread(image_path)
         if img is None:
@@ -745,20 +711,20 @@ async def process_manga_task(job_id: str, image_path: str):
         jobs_db[job_id]["message"] = "Translating extracted text."
         await notify_state_change()
 
-
+        byok_cfg = byok_config or jobs_db[job_id].get("byok_config")
         source_texts = [b.text or "" for b in blocks]
         if PAGE_CONTEXT_TRANSLATION and len(source_texts) > 1:
             try:
-                translated_texts = await translate_page_texts(source_texts)
+                translated_texts = await translate_page_texts(source_texts, byok_config=byok_cfg)
             except Exception as exc:
                 print(
                     f"[job {job_id}] Page-context translation failed, "
                     f"falling back to per-bubble translation: {exc}"
                 )
-                translation_tasks = [translate_text(text) for text in source_texts]
+                translation_tasks = [translate_text(text, byok_config=byok_cfg) for text in source_texts]
                 translated_texts = await asyncio.gather(*translation_tasks)
         else:
-            translation_tasks = [translate_text(text) for text in source_texts]
+            translation_tasks = [translate_text(text, byok_config=byok_cfg) for text in source_texts]
             translated_texts = await asyncio.gather(*translation_tasks)
 
         for block, tx in zip(blocks, translated_texts):
@@ -949,11 +915,13 @@ def _verify_image_signature(content: bytes) -> bool:
 
 @app.post("/api/translate", response_model=TranslateJobResponse, status_code=202)
 async def translate_manga(
+    request: Request,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     project_id: str | None = Form(None)
 ):
     job_id = str(uuid.uuid4())
+    byok_config = extract_byok_config(request)
 
     if file.content_type not in ALLOWED_IMAGE_CONTENT_TYPES:
         raise HTTPException(
@@ -993,6 +961,7 @@ async def translate_manga(
         "original_url": _to_public_url(file_path),
         "project_id": project_id,
         "region_mode": "detected",
+        "byok_config": byok_config,
     }
 
     if project_id and project_id in projects_db:
@@ -1002,10 +971,58 @@ async def translate_manga(
         else:
             projects_db[project_id]["page_order"].append(job_id)
 
-    background_tasks.add_task(process_manga_task, job_id, str(file_path))
+    background_tasks.add_task(process_manga_task, job_id, str(file_path), byok_config=byok_config)
     await notify_state_change()
 
     return {"id": job_id, "status": "queued"}
+
+
+@app.get("/api/byok/providers")
+async def get_byok_providers():
+    return {"providers": PRESET_PROVIDERS}
+
+
+class BYOKTestRequest(BaseModel):
+    provider: str = Field(default="openai")
+    api_key: str | None = Field(default=None)
+    model: str = Field(default="gpt-4o-mini")
+    api_base: str | None = Field(default=None)
+
+
+@app.post("/api/byok/test")
+async def test_byok_connection(request: Request, payload: BYOKTestRequest | None = None):
+    if payload and payload.provider:
+        config = BYOKConfig(
+            provider=payload.provider.lower(),
+            api_key=payload.api_key,
+            model=payload.model,
+            api_base=payload.api_base,
+        )
+    else:
+        config = extract_byok_config(request)
+
+    test_messages = [
+        {"role": "system", "content": "You are an API connection tester. Reply briefly with 'OK'."},
+        {"role": "user", "content": "Ping"},
+    ]
+
+    try:
+        reply = await byok_completion(messages=test_messages, config=config, timeout=15.0)
+        return {
+            "status": "success",
+            "message": f"Successfully connected to provider '{config.provider}' using model '{config.model}'.",
+            "reply": reply,
+            "config": {
+                "provider": config.provider,
+                "model": config.model,
+                "api_base": config.api_base,
+            },
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Connection test failed for provider '{config.provider}': {str(e)}",
+        )
 
 
 
