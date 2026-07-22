@@ -69,17 +69,17 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, scale: 0.95 }}
-      className="group bg-[#0d0d0d] border border-[#222] overflow-hidden shadow-2xl hover:border-cyan-500/30 transition-all duration-500"
+      className="group bg-panel border border-border overflow-hidden transition-all duration-300"
     >
       {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-[#222] bg-[#111]">
+      <div className="flex items-center justify-between p-4 border-b border-border bg-surface">
         <div className="flex items-center gap-3">
-          <Icon icon="mdi:file-image" className="text-[#888]" />
+          <Icon icon="mdi:file-image" className="text-muted" />
           <div className="flex flex-col">
-            <span className="font-mono text-[10px] uppercase tracking-widest text-[#444]">
+            <span className="font-mono text-xs uppercase tracking-widest text-subtle font-medium">
               Source File
             </span>
-            <span className="font-mono text-xs uppercase tracking-widest truncate max-w-[200px] font-bold">
+            <span className="font-mono text-xs uppercase tracking-widest truncate max-w-[200px] font-bold text-main">
               {item.filename}
             </span>
           </div>
@@ -89,14 +89,14 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
           <div className="flex items-center gap-6 mr-4">
             <div
               className={cn(
-                "flex items-center gap-2 px-3 py-1 bg-[#1a1a1a] rounded-full border border-[#333] transition-all",
+                "flex items-center gap-2 px-3 py-1 bg-panel rounded-full border border-border transition-all",
                 item.status === "completed" &&
-                  "border-green-500/50 bg-green-500/5 text-green-400",
+                  "border-green-500/50 bg-green-500/10 text-green-600 dark:text-green-400",
                 item.status === "awaiting_review" &&
-                  "border-yellow-500/50 bg-yellow-500/5 text-yellow-400 shadow-[0_0_10px_rgba(234,179,8,0.1)]",
-                hasError && "border-red-500/50 bg-red-500/5 text-red-400",
+                  "border-yellow-500/50 bg-yellow-500/10 text-yellow-600 dark:text-yellow-400",
+                hasError && "border-red-500/50 bg-red-500/10 text-red-600 dark:text-red-400",
                 !["completed", "awaiting_review"].includes(item.status) && !hasError &&
-                  "border-cyan-500/50 bg-cyan-500/5 text-cyan-400",
+                  "border-accent/50 bg-accent-surface text-accent",
               )}
             >
               <span
@@ -105,26 +105,26 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
                   item.status === "completed"
                     ? "bg-green-500"
                     : item.status === "awaiting_review"
-                      ? "bg-yellow-500 animate-pulse shadow-[0_0_8px_#eab308]"
+                      ? "bg-yellow-500"
                       : hasError
                         ? "bg-red-500"
-                        : "bg-cyan-500 animate-pulse",
+                        : "bg-accent",
                 )}
               />
-              <span className="text-[10px] font-black uppercase tracking-[0.2em]">
+              <span className="text-xs font-bold uppercase tracking-wider">
                 {item.status === "awaiting_review" ? "needs review" : item.status}
               </span>
             </div>
             <div className="flex gap-2">
               {item.status === "completed" && (
-                <div className="flex bg-[#111] border border-[#333] p-1 rounded">
+                <div className="flex bg-surface border border-border p-1 rounded">
                   <button
                     onClick={() => setDisplayMode("original")}
                     className={cn(
-                      "px-2 py-1 text-[9px] font-mono transition-all",
+                      "px-2 py-1 text-xs font-mono transition-all font-medium",
                       displayMode === "original"
-                        ? "bg-cyan-500 text-black"
-                        : "text-[#888] hover:text-white",
+                        ? "bg-accent text-white"
+                        : "text-muted hover:text-main",
                     )}
                   >
                     RAW
@@ -132,10 +132,10 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
                   <button
                     onClick={() => setDisplayMode("inpainted")}
                     className={cn(
-                      "px-2 py-1 text-[9px] font-mono border-x border-[#333] transition-all",
+                      "px-2 py-1 text-xs font-mono border-x border-border transition-all font-medium",
                       displayMode === "inpainted"
-                        ? "bg-cyan-500 text-black"
-                        : "text-[#888] hover:text-white",
+                        ? "bg-accent text-white"
+                        : "text-muted hover:text-main",
                     )}
                   >
                     CLEAN
@@ -143,10 +143,10 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
                   <button
                     onClick={() => setDisplayMode("translated")}
                     className={cn(
-                      "px-2 py-1 text-[9px] font-mono transition-all",
+                      "px-2 py-1 text-xs font-mono transition-all font-medium",
                       displayMode === "translated"
-                        ? "bg-cyan-500 text-black"
-                        : "text-[#888] hover:text-white",
+                        ? "bg-accent text-white"
+                        : "text-muted hover:text-main",
                     )}
                   >
                     FINAL
@@ -156,7 +156,7 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
               {item.status === "awaiting_review" && (
                 <button
                   onClick={() => setIsEditorOpen(true)}
-                  className="px-3 py-1 bg-cyan-500 hover:bg-cyan-400 text-black border border-cyan-500 transition-all text-[9px] font-mono font-black uppercase tracking-widest flex items-center gap-1.5"
+                  className="px-3 py-1.5 min-h-11 bg-accent hover:bg-accent-hover text-white transition-all text-xs font-mono font-bold uppercase tracking-widest flex items-center gap-1.5 rounded"
                 >
                   <Icon icon="mdi:translate" />
                   REVIEW
@@ -165,8 +165,8 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
               <button
                 onClick={() => setShowText(!showText)}
                 className={cn(
-                  "p-2 border border-[#333] hover:border-cyan-500/50 hover:bg-cyan-500/5 transition-all text-xs",
-                  showText && "text-cyan-500 border-cyan-500/50 bg-cyan-500/5",
+                  "p-2.5 border border-border bg-surface hover:border-accent hover:text-accent transition-all text-xs rounded min-h-11 min-w-11 flex items-center justify-center",
+                  showText && "text-accent border-accent bg-accent-surface",
                 )}
                 title="View AI Results"
               >
@@ -175,7 +175,7 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
               {item.status !== "completed" && !hasError && (
                 <button
                   onClick={handleCancel}
-                  className="p-2 border border-[#333] text-[#444] hover:text-yellow-500 hover:border-yellow-500 transition-all text-xs"
+                  className="p-2.5 border border-border bg-surface text-muted hover:text-yellow-600 hover:border-yellow-500 transition-all text-xs rounded min-h-11 min-w-11 flex items-center justify-center"
                   title="Cancel Job"
                 >
                   <Icon icon="mdi:stop-circle-outline" />
@@ -183,7 +183,7 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
               )}
               <button
                 onClick={() => onRemove(item.id)}
-                className="p-2 border border-[#333] text-[#444] hover:text-red-500 hover:border-red-500 transition-all text-xs"
+                className="p-2.5 border border-border bg-surface text-muted hover:text-red-500 hover:border-red-500 transition-all text-xs rounded min-h-11 min-w-11 flex items-center justify-center"
                 title="Delete Job"
               >
                 <Icon icon="mdi:delete-outline" />
@@ -193,10 +193,10 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
         </div>
       </div>
 
-      <div className="grid md:grid-cols-2 bg-black gap-[1px] relative">
+      <div className="grid md:grid-cols-2 bg-border gap-[1px] relative">
         {/* Original */}
-        <div className="relative aspect-[3/4] bg-[#080808] overflow-hidden flex items-center justify-center">
-          <div className="absolute top-4 left-4 z-10 px-2 py-1 bg-black/80 backdrop-blur-md border border-[#333] text-[9px] font-mono uppercase tracking-[0.2em] text-[#888]">
+        <div className="relative aspect-[3/4] bg-app overflow-hidden flex items-center justify-center">
+          <div className="absolute top-4 left-4 z-10 px-2 py-1 bg-surface/90 border border-border text-xs font-mono uppercase tracking-wider text-muted font-medium rounded">
             Raw Input
           </div>
           <img
@@ -207,8 +207,8 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
         </div>
 
         {/* AI Results Layer */}
-        <div className="relative aspect-[3/4] bg-[#080808] overflow-hidden transition-colors font-mono">
-          <div className="absolute top-4 left-4 z-10 px-2 py-1 bg-cyan-500/20 backdrop-blur-md border border-cyan-500/30 text-[9px] font-mono uppercase tracking-[0.2em] text-cyan-500">
+        <div className="relative aspect-[3/4] bg-app overflow-hidden transition-colors font-mono">
+          <div className="absolute top-4 left-4 z-10 px-2 py-1 bg-accent-surface border border-accent/30 text-xs font-mono uppercase tracking-wider text-accent font-medium rounded">
             Pipeline Result
           </div>
 
@@ -219,15 +219,15 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="absolute inset-0 p-8 flex flex-col justify-center gap-4 bg-[#0a0a0a]"
+                className="absolute inset-0 p-8 flex flex-col justify-center gap-4 bg-app"
               >
                 <div className="flex items-center gap-3 text-red-500">
                   <Icon icon="mdi:alert-octagon-outline" className="text-3xl" />
-                  <span className="text-[10px] uppercase tracking-[0.3em] font-black">
+                  <span className="text-xs uppercase tracking-widest font-black">
                     Job Stopped
                   </span>
                 </div>
-                <p className="text-sm text-red-100 font-sans leading-relaxed p-4 bg-red-500/10 border border-red-500/30">
+                <p className="text-sm text-red-600 dark:text-red-300 font-sans leading-relaxed p-4 bg-red-500/10 border border-red-500/30 rounded">
                   {statusMessage}
                 </p>
               </motion.div>
@@ -237,31 +237,31 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="absolute inset-0 p-8 flex flex-col justify-center items-center gap-6 bg-[#0a0a0a] border border-cyan-500/20 text-center"
+                className="absolute inset-0 p-8 flex flex-col justify-center items-center gap-6 bg-app border border-accent/20 text-center"
               >
-                <div className="flex flex-col items-center gap-3 text-cyan-500">
+                <div className="flex flex-col items-center gap-3 text-accent">
                   <Icon
                     icon="mdi:shield-lock-outline"
-                    className="text-5xl animate-pulse shadow-[0_0_20px_rgba(6,182,212,0.2)]"
+                    className="text-5xl"
                   />
-                  <span className="text-[9px] uppercase tracking-[0.4em] font-black">
+                  <span className="text-xs uppercase tracking-widest font-black">
                     Human Verification Gate
                   </span>
                 </div>
                 <div className="space-y-2 max-w-xs">
-                  <h4 className="text-xs font-bold uppercase tracking-tight">
+                  <h4 className="text-sm font-bold uppercase tracking-tight text-main">
                     AI Draft Complete
                   </h4>
-                  <p className="text-[10px] text-[#666] font-mono leading-relaxed uppercase tracking-tighter">
+                  <p className="text-xs text-muted font-mono leading-relaxed uppercase tracking-tighter">
                     Linguistic translation engine awaits manual review and
                     approval prior to typesetting and premium rendering.
                   </p>
                 </div>
                 <button
                   onClick={() => setIsEditorOpen(true)}
-                  className="px-5 py-2 bg-cyan-500 hover:bg-cyan-400 text-black font-bold uppercase tracking-widest text-[10px] font-mono transition-all duration-300 shadow-lg shadow-cyan-500/20 flex items-center gap-2 hover:scale-[1.02] cursor-pointer"
+                  className="px-5 py-2.5 min-h-11 bg-accent hover:bg-accent-hover text-white font-bold uppercase tracking-widest text-xs font-mono transition-all duration-200 flex items-center gap-2 cursor-pointer rounded"
                 >
-                  <Icon icon="mdi:translate" className="text-xs" />
+                  <Icon icon="mdi:translate" className="text-sm" />
                   Enter Translation Studio
                 </button>
               </motion.div>
@@ -271,13 +271,13 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="absolute inset-0 p-8 flex flex-col gap-6 overflow-y-auto bg-[#0a0a0a]"
+                className="absolute inset-0 p-8 flex flex-col gap-6 overflow-y-auto bg-app"
               >
                 <div className="space-y-2">
-                  <span className="text-[9px] uppercase tracking-widest text-[#444] block">
+                  <span className="text-xs uppercase tracking-widest text-muted block font-medium">
                     Extracted Text (GLM-OCR)
                   </span>
-                  <p className="text-xs text-[#888] font-sans leading-relaxed min-h-[50px] p-3 bg-[#111] border border-[#222]">
+                  <p className="text-xs text-main font-sans leading-relaxed min-h-[50px] p-3 bg-surface border border-border rounded">
                     {item.ocr_text ||
                       (["segmenting", "ocr"].includes(item.status)
                         ? "Processing OCR..."
@@ -285,10 +285,10 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
                   </p>
                 </div>
                 <div className="space-y-2">
-                  <span className="text-[9px] uppercase tracking-widest text-cyan-500 block">
+                  <span className="text-xs uppercase tracking-widest text-accent block font-medium">
                     Translated Text (Thai Storytelling)
                   </span>
-                  <p className="text-sm text-cyan-100 font-sans leading-relaxed min-h-[100px] p-3 bg-cyan-950/20 border border-cyan-500/20 shadow-inner">
+                  <p className="text-sm text-main font-sans leading-relaxed min-h-[100px] p-3 bg-accent-surface border border-accent/20 rounded">
                     {item.translated_text ||
                       (item.status === "translating"
                         ? "Translating to Thai (Vibe Check)..."
@@ -315,13 +315,13 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
                   <div className="flex flex-col items-center gap-4">
                     <Icon
                       icon="eos-icons:bubble-loading"
-                      className="text-4xl text-cyan-500 shadow-[0_0_20px_rgba(6,182,212,0.3)]"
+                      className="text-4xl text-accent"
                     />
                     <div>
-                      <span className="text-[10px] text-[#888] uppercase tracking-[0.4em] block mb-2">
+                      <span className="text-xs text-muted uppercase tracking-widest block mb-2 font-medium">
                         {item.status}...
                       </span>
-                      <span className="text-[10px] text-[#444] font-mono tracking-widest">
+                      <span className="text-xs text-subtle font-mono tracking-widest">
                         {statusMessage}
                       </span>
                     </div>
@@ -335,11 +335,11 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
 
       {/* Progress & Error */}
       <div className="relative">
-        <div className="h-1 bg-[#1a1a1a]">
+        <div className="h-1 bg-border">
           <motion.div
             className={cn(
-              "h-full shadow-[0_0_15px_rgba(6,182,212,0.8)]",
-              hasError ? "bg-red-500" : "bg-cyan-500",
+              "h-full",
+              hasError ? "bg-red-500" : "bg-accent",
             )}
             initial={{ width: 0 }}
             animate={{ width: `${item.progress}%` }}
@@ -349,10 +349,10 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
         {(item.error || item.message) && (
           <div
             className={cn(
-              "px-4 py-2 border-t text-[10px] font-mono uppercase tracking-widest",
+              "px-4 py-2 border-t text-xs font-mono uppercase tracking-widest",
               hasError
                 ? "bg-red-500/10 border-red-500/20 text-red-500"
-                : "bg-[#111] border-[#222] text-[#888]",
+                : "bg-surface border-border text-muted",
             )}
           >
             {hasError ? "Critical Error: " : "Job Status: "}
