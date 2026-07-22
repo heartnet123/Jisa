@@ -204,18 +204,18 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
           className="max-w-6xl mx-auto space-y-8"
         >
           {/* Header */}
-          <div className="border-b border-[#1c1c1c] pb-6">
-            <h2 className="text-2xl font-black tracking-tight uppercase font-mono text-white">
+          <div className="border-b border-border pb-6">
+            <h2 className="text-2xl font-black tracking-tight uppercase font-mono text-main">
               Project Ingestion Studio
             </h2>
-            <p className="text-xs text-[#666] font-mono uppercase tracking-widest mt-1">
+            <p className="text-xs text-muted font-mono uppercase tracking-widest mt-1">
               Select or initialize a localized translation session
             </p>
           </div>
 
           {/* Alert regions */}
           {bootstrapError && (
-            <div role="alert" className="p-4 border border-red-500/35 bg-red-950/20 rounded-lg flex items-center gap-3 text-xs font-mono text-red-400">
+            <div role="alert" className="p-4 border border-red-500/35 bg-red-500/10 rounded-lg flex items-center gap-3 text-xs font-mono text-red-500">
               <Icon icon="mdi:alert-circle-outline" className="text-lg" />
               <span>Failed to fetch projects: {bootstrapError}</span>
             </div>
@@ -223,13 +223,13 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
             {/* Left: Create Project Form */}
-            <div className="lg:col-span-1 bg-[#0b0b0b] border border-[#1c1c1c] p-6 rounded-lg h-fit space-y-4">
-              <span className="font-mono text-xs text-[#666] uppercase tracking-widest font-black block">
+            <div className="lg:col-span-1 bg-panel border border-border p-6 rounded-lg h-fit space-y-4">
+              <span className="font-mono text-xs text-muted uppercase tracking-widest font-black block">
                 Initialize Session
               </span>
               <form onSubmit={handleCreateProject} className="space-y-4">
                 <div className="space-y-2">
-                  <label htmlFor="new-project-name" className="text-[10px] text-[#555] uppercase tracking-widest font-mono font-bold block">
+                  <label htmlFor="new-project-name" className="text-xs text-muted uppercase tracking-widest font-mono font-bold block">
                     Session Title
                   </label>
                   <input
@@ -238,14 +238,14 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
                     placeholder="Chapter 1, Volume 1..."
                     value={newProjectName}
                     onChange={(e) => setNewProjectName(e.target.value)}
-                    className="w-full text-xs font-mono px-3 py-2.5 border border-[#222] bg-[#121212] rounded text-white focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-all uppercase"
+                    className="w-full text-xs font-mono px-3 py-2.5 border border-border bg-surface rounded text-main focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all uppercase"
                     disabled={isSubmittingProject}
                     required
                   />
                 </div>
 
                 {createProjectError && (
-                  <div role="alert" className="p-2 border border-red-500/20 bg-red-500/5 text-[10px] font-mono text-red-500 rounded">
+                  <div role="alert" className="p-2 border border-red-500/20 bg-red-500/10 text-xs font-mono text-red-500 rounded">
                     {createProjectError}
                   </div>
                 )}
@@ -253,7 +253,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
                 <button
                   type="submit"
                   disabled={!newProjectName.trim() || isSubmittingProject}
-                  className="w-full py-3 bg-cyan-500 hover:bg-cyan-400 disabled:bg-[#1a1a1a] disabled:text-[#444] text-black font-black uppercase tracking-widest font-mono text-xs rounded transition-colors cursor-pointer flex items-center justify-center gap-2"
+                  className="w-full min-h-11 py-3 bg-accent hover:bg-accent-hover disabled:bg-panel disabled:text-muted text-white font-black uppercase tracking-widest font-mono text-xs rounded transition-colors cursor-pointer flex items-center justify-center gap-2"
                 >
                   {isSubmittingProject ? (
                     <>
@@ -272,12 +272,12 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
 
             {/* Right: Project Grid */}
             <div className="lg:col-span-2 space-y-4">
-              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-[#1c1c1c] pb-2">
-                <span className="font-mono text-xs text-[#666] uppercase tracking-widest font-black block">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-border pb-2">
+                <span className="font-mono text-xs text-muted uppercase tracking-widest font-black block">
                   Active Project Sessions ({projects.length})
                 </span>
                 <div className="relative w-full sm:w-60">
-                  <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-[#555]">
+                  <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-muted">
                     <Icon icon="mdi:magnify" />
                   </span>
                   <input
@@ -285,28 +285,28 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
                     placeholder="Search sessions..."
                     value={projectSearchQuery}
                     onChange={(e) => setProjectSearchQuery(e.target.value)}
-                    className="w-full text-xs font-mono pl-9 pr-3 py-1.5 border border-[#222] bg-[#121212] rounded text-white focus:outline-none focus:border-cyan-500 transition-colors"
+                    className="w-full text-xs font-mono pl-9 pr-3 py-1.5 border border-border bg-surface rounded text-main focus:outline-none focus:border-accent transition-colors"
                   />
                 </div>
               </div>
 
               {projects.length === 0 ? (
-                <div className="flex flex-col items-center justify-center p-20 border border-dashed border-[#1c1c1c] bg-[#0b0b0b]/40 rounded-lg text-center">
-                  <Icon icon="mdi:folder-open-outline" className="text-5xl text-[#333] mb-4" />
-                  <span className="font-mono text-xs text-[#555] uppercase tracking-widest block font-black">
+                <div className="flex flex-col items-center justify-center p-20 border border-dashed border-border bg-panel/40 rounded-lg text-center">
+                  <Icon icon="mdi:folder-open-outline" className="text-5xl text-muted mb-4" />
+                  <span className="font-mono text-xs text-muted uppercase tracking-widest block font-black">
                     No Active Sessions Found
                   </span>
-                  <p className="text-[10px] text-[#444] font-mono mt-2 uppercase max-w-xs leading-relaxed">
+                  <p className="text-xs text-subtle font-mono mt-2 uppercase max-w-xs leading-relaxed">
                     Create a new session using the control center to start batching translations.
                   </p>
                 </div>
               ) : filteredProjects.length === 0 ? (
-                <div className="flex flex-col items-center justify-center p-20 border border-dashed border-[#1c1c1c] bg-[#0b0b0b]/20 rounded-lg text-center">
-                  <Icon icon="mdi:folder-search-outline" className="text-5xl text-[#333] mb-4" />
-                  <span className="font-mono text-xs text-[#555] uppercase tracking-widest block font-black">
+                <div className="flex flex-col items-center justify-center p-20 border border-dashed border-border bg-panel/20 rounded-lg text-center">
+                  <Icon icon="mdi:folder-search-outline" className="text-5xl text-muted mb-4" />
+                  <span className="font-mono text-xs text-muted uppercase tracking-widest block font-black">
                     No Matching Sessions
                   </span>
-                  <p className="text-[10px] text-[#444] font-mono mt-2 uppercase max-w-xs leading-relaxed">
+                  <p className="text-xs text-subtle font-mono mt-2 uppercase max-w-xs leading-relaxed">
                     Try adjusting your search filters to find existing project sessions.
                   </p>
                 </div>
@@ -321,34 +321,34 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
                       <button
                         key={proj.id}
                         onClick={() => router.push(`/projects/${proj.id}`)}
-                        className="p-5 bg-[#0b0b0b] border border-[#1c1c1c] hover:border-cyan-500/30 text-left rounded-lg transition-all duration-300 font-mono text-xs group cursor-pointer relative overflow-hidden flex flex-col justify-between h-40 focus:outline-none focus:ring-1 focus:ring-cyan-500"
+                        className="p-5 bg-panel border border-border hover:border-accent text-left rounded-lg transition-all duration-300 font-mono text-xs group cursor-pointer relative overflow-hidden flex flex-col justify-between h-40 focus:outline-none focus:ring-1 focus:ring-accent"
                       >
                         <div className="space-y-1 w-full">
                           <div className="flex justify-between items-start gap-2">
-                            <span className="font-bold text-white uppercase text-sm truncate group-hover:text-cyan-400 transition-colors pr-6">
+                            <span className="font-bold text-main uppercase text-sm truncate group-hover:text-accent transition-colors pr-6">
                               {proj.name}
                             </span>
-                            <Icon icon="mdi:arrow-right-thin" className="text-lg text-[#333] group-hover:text-cyan-400 transition-colors group-hover:translate-x-1" />
+                            <Icon icon="mdi:arrow-right-thin" className="text-lg text-muted group-hover:text-accent transition-colors group-hover:translate-x-1" />
                           </div>
-                          <span className="text-[8px] text-[#444] block">ID: {proj.id}</span>
+                          <span className="text-xs text-subtle block">ID: {proj.id}</span>
                         </div>
 
                         <div className="w-full space-y-3">
-                          <div className="flex justify-between items-center text-[10px] text-[#666]">
+                          <div className="flex justify-between items-center text-xs text-muted">
                             <span>{projJobs.length} pages total</span>
-                            <span className="text-cyan-500/80 font-bold">{progress}% done</span>
+                            <span className="text-accent font-bold">{progress}% done</span>
                           </div>
 
                           {/* Simple Project progress bar */}
-                          <div className="h-1 bg-[#151515] rounded-full overflow-hidden w-full">
+                          <div className="h-1 bg-surface rounded-full overflow-hidden w-full">
                             <div
-                              className="h-full bg-cyan-500/60 shadow-[0_0_8px_rgba(6,182,212,0.4)] transition-all duration-500"
+                              className="h-full bg-accent transition-all duration-500"
                               style={{ width: `${progress}%` }}
                             />
                           </div>
                         </div>
 
-                        <div className="text-[9px] text-[#444] mt-1">
+                        <div className="text-xs text-subtle mt-1">
                           Created: {new Date(proj.created_at).toLocaleDateString()}
                         </div>
                       </button>
@@ -422,10 +422,10 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
         className="max-w-6xl mx-auto space-y-6 pb-12"
       >
         {/* Back navigation & Header */}
-        <div className="flex justify-between items-center border-b border-[#1c1c1c] pb-4">
+        <div className="flex justify-between items-center border-b border-border pb-4">
           <button
             onClick={() => router.push('/projects')}
-            className="flex items-center gap-1.5 px-3 py-1.5 border border-[#222] bg-[#111] hover:bg-[#181818] transition-all rounded text-[10px] font-mono uppercase tracking-widest text-[#aaa] cursor-pointer focus:outline-none focus:ring-1 focus:ring-cyan-500"
+            className="flex min-h-11 items-center gap-1.5 px-3 py-1.5 border border-border bg-surface hover:bg-panel transition-all rounded text-xs font-mono uppercase tracking-widest text-main cursor-pointer focus:outline-none focus:ring-1 focus:ring-accent"
           >
             <Icon icon="mdi:arrow-left" /> Back to projects
           </button>
@@ -433,25 +433,25 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
           <div className="flex items-center gap-3">
             <button
               onClick={() => setIsBYOKModalOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 border border-violet-500/30 bg-violet-600/10 hover:bg-violet-600/20 text-violet-300 transition-all rounded text-[10px] font-mono uppercase tracking-widest cursor-pointer focus:outline-none focus:ring-1 focus:ring-violet-500 shadow-sm"
+              className="flex min-h-11 items-center gap-1.5 px-3 py-1.5 border border-accent/30 bg-accent-surface hover:bg-accent/20 text-accent transition-all rounded text-xs font-mono uppercase tracking-widest cursor-pointer focus:outline-none focus:ring-1 focus:ring-accent shadow-sm"
             >
-              <Icon icon="solar:key-minimalistic-square-bold-duotone" className="text-sm text-violet-400" />
+              <Icon icon="solar:key-minimalistic-square-bold-duotone" className="text-sm text-accent" />
               <span>BYOK AI Key</span>
               {byokConfig && (
-                <span className="ml-1 px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-200 text-[9px] font-bold border border-violet-500/30">
+                <span className="ml-1 px-1.5 py-0.5 rounded bg-accent/20 text-accent text-xs font-bold border border-accent/30">
                   {byokConfig.provider}:{byokConfig.model}
                 </span>
               )}
             </button>
 
-            <span className="text-[10px] text-[#444] font-mono uppercase tracking-widest hidden sm:inline">
+            <span className="text-xs text-subtle font-mono uppercase tracking-widest hidden sm:inline font-medium">
               Project-First Session Workspace
             </span>
           </div>
         </div>
 
         {/* Project Header Info and Stats */}
-        <div className="bg-[#0b0b0b] border border-[#1c1c1c] p-6 rounded-lg flex flex-wrap justify-between items-center gap-4">
+        <div className="bg-panel border border-border p-6 rounded-lg flex flex-wrap justify-between items-center gap-4">
           <div className="space-y-1">
             {isEditingProjectName ? (
               <form 
@@ -468,13 +468,13 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
                   type="text"
                   value={editingProjectName}
                   onChange={(e) => setEditingProjectName(e.target.value)}
-                  className="text-xs font-mono px-3 py-1.5 border border-cyan-500 bg-[#121212] rounded text-white focus:outline-none uppercase"
+                  className="text-xs font-mono px-3 py-1.5 border border-accent bg-surface rounded text-main focus:outline-none uppercase"
                   autoFocus
                   required
                 />
                 <button
                   type="submit"
-                  className="p-2 bg-cyan-500 hover:bg-cyan-400 text-black rounded flex items-center justify-center cursor-pointer transition-colors"
+                  className="p-2 min-h-11 min-w-11 bg-accent hover:bg-accent-hover text-white rounded flex items-center justify-center cursor-pointer transition-colors"
                   title="Save Name"
                 >
                   <Icon icon="mdi:check" className="text-xs font-bold" />
@@ -485,7 +485,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
                     setEditingProjectName(activeProj.name);
                     setIsEditingProjectName(false);
                   }}
-                  className="p-2 border border-[#333] hover:border-red-500 hover:text-red-500 rounded flex items-center justify-center cursor-pointer transition-colors"
+                  className="p-2 min-h-11 min-w-11 border border-border hover:border-red-500 hover:text-red-500 rounded flex items-center justify-center cursor-pointer transition-colors"
                   title="Cancel"
                 >
                   <Icon icon="mdi:close" className="text-xs" />
@@ -493,7 +493,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
               </form>
             ) : (
               <div className="flex items-center gap-2 group/title">
-                <h3 className="text-base font-black tracking-tight text-white uppercase font-mono">
+                <h3 className="text-base font-black tracking-tight text-main uppercase font-mono">
                   {activeProj.name}
                 </h3>
                 <button
@@ -501,42 +501,42 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
                     setEditingProjectName(activeProj.name);
                     setIsEditingProjectName(true);
                   }}
-                  className="opacity-0 group-hover/title:opacity-100 p-1 text-[#666] hover:text-cyan-400 rounded transition-all cursor-pointer"
+                  className="opacity-0 group-hover/title:opacity-100 p-1 text-muted hover:text-accent rounded transition-all cursor-pointer"
                   title="Rename Session"
                 >
                   <Icon icon="mdi:pencil-outline" className="text-xs" />
                 </button>
               </div>
             )}
-            <p className="text-[9px] text-[#555] font-mono uppercase tracking-widest">
+            <p className="text-xs text-subtle font-mono uppercase tracking-widest font-medium">
               ID: {projectId} {"//"} Created: {new Date(activeProj.created_at).toLocaleString()}
             </p>
           </div>
 
           <div className="flex items-center gap-4">
-            <div className="flex gap-2 font-mono text-[10px]">
-              <div className="bg-[#111] border border-[#222] px-3 py-2 rounded">
-                <span className="text-[#555] uppercase block text-[8px] font-bold">Processed</span>
-                <span className="text-green-400 font-bold text-sm">{completedCount}</span>
-                <span className="text-[#444] text-[9px]"> / {activeProjJobs.length} pages</span>
+            <div className="flex gap-2 font-mono text-xs">
+              <div className="bg-surface border border-border px-3 py-2 rounded">
+                <span className="text-muted uppercase block text-xs font-bold">Processed</span>
+                <span className="text-green-600 dark:text-green-400 font-bold text-sm">{completedCount}</span>
+                <span className="text-subtle text-xs"> / {activeProjJobs.length} pages</span>
               </div>
-              <div className="bg-[#111] border border-[#222] px-3 py-2 rounded">
-                <span className="text-[#555] uppercase block text-[8px] font-bold">In Progress</span>
-                <span className="text-cyan-400 font-bold text-sm">{processingCount}</span>
-                <span className="text-[#444] text-[9px]"> active</span>
+              <div className="bg-surface border border-border px-3 py-2 rounded">
+                <span className="text-muted uppercase block text-xs font-bold">In Progress</span>
+                <span className="text-accent font-bold text-sm">{processingCount}</span>
+                <span className="text-subtle text-xs"> active</span>
               </div>
               {(failedCount > 0 || awaitingReviewCount > 0) && (
-                <div className="bg-[#111] border border-[#222] px-3 py-2 rounded">
-                  <span className="text-[#555] uppercase block text-[8px] font-bold">Attention</span>
-                  <span className="text-yellow-500 font-bold text-sm">{failedCount + awaitingReviewCount}</span>
-                  <span className="text-[#444] text-[9px]"> items</span>
+                <div className="bg-surface border border-border px-3 py-2 rounded">
+                  <span className="text-muted uppercase block text-xs font-bold">Attention</span>
+                  <span className="text-yellow-600 dark:text-yellow-400 font-bold text-sm">{failedCount + awaitingReviewCount}</span>
+                  <span className="text-subtle text-xs"> items</span>
                 </div>
               )}
             </div>
 
             <button
               onClick={handleDelete}
-              className="px-3 py-2 border border-[#222] hover:border-red-500/50 hover:text-red-500 hover:bg-red-500/5 transition-all text-[9px] font-mono uppercase tracking-widest rounded flex items-center gap-1 cursor-pointer focus:outline-none focus:ring-1 focus:ring-red-500"
+              className="px-3 py-2 min-h-11 border border-border hover:border-red-500/50 hover:text-red-500 hover:bg-red-500/5 transition-all text-xs font-mono uppercase tracking-widest rounded flex items-center gap-1 cursor-pointer focus:outline-none focus:ring-1 focus:ring-red-500"
               title="Delete Project Session"
             >
               <Icon icon="mdi:delete-outline" className="text-xs" />
@@ -546,7 +546,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
         </div>
 
         {/* Semantic step indicator rail */}
-        <nav aria-label="Project stage progress" className="flex items-center gap-2 bg-[#0b0b0b] border border-[#1c1c1c] p-4 rounded-lg">
+        <nav aria-label="Project stage progress" className="flex items-center gap-2 bg-panel border border-border p-4 rounded-lg">
           {[
             { id: 'upload', label: '1. Ingestion / Upload', active: activeProjJobs.length === 0 || isUploading },
             { id: 'pipeline', label: '2. Pipeline Processing', active: processingCount > 0 },
