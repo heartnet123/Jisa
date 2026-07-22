@@ -1,3 +1,4 @@
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -6,6 +7,12 @@ from fastapi.testclient import TestClient
 
 import main
 from repository import SQLiteReviewRepository
+
+TINY_PNG = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    b"\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\rIDATx\x9cc\xf8\xff\xff?"
+    b"\x03\x00\x05\xfe\x02\xfe\xa7\x96a\x1d\x00\x00\x00\x00IEND\xaeB`\x82"
+)
 
 
 class ProjectSessionWorkflowTests(unittest.TestCase):
@@ -33,15 +40,13 @@ class ProjectSessionWorkflowTests(unittest.TestCase):
         self._temporary_directory.cleanup()
 
     def test_create_and_list_projects(self) -> None:
-        # Create a new project session
         response = self.client.post("/api/projects", json={"name": "Test Chapter 1"})
         self.assertEqual(response.status_code, 201)
         body = response.json()
         self.assertIn("id", body)
         self.assertEqual(body["name"], "Test Chapter 1")
         self.assertEqual(body["job_ids"], [])
-        
-        # List projects and verify it is returned
+
         list_response = self.client.get("/api/projects")
         self.assertEqual(list_response.status_code, 200)
         list_body = list_response.json()
@@ -50,39 +55,92 @@ class ProjectSessionWorkflowTests(unittest.TestCase):
         self.assertEqual(list_body[0]["name"], "Test Chapter 1")
 
     def test_translate_job_associates_with_project(self) -> None:
-        # Create project first
         proj_response = self.client.post("/api/projects", json={"name": "Test Chapter 2"})
         project_id = proj_response.json()["id"]
 
-        # Mock translate request with a project_id form field
-        import io
-        dummy_file = io.BytesIO(b"fake image data")
-        
-        # Mock translate call
+        dummy_file = io.BytesIO(TINY_PNG)
+
         response = self.client.post(
             "/api/translate",
             files={"file": ("page1.png", dummy_file, "image/png")},
-            data={"project_id": project_id}
+            data={"project_id": project_id},
         )
         self.assertEqual(response.status_code, 202)
         job_id = response.json()["id"]
 
-        # Check job status returns project_id
         status_response = self.client.get(f"/api/status/{job_id}")
         self.assertEqual(status_response.status_code, 200)
         self.assertEqual(status_response.json()["project_id"], project_id)
 
-        # Check project now lists this job_id
         list_response = self.client.get("/api/projects")
         self.assertEqual(list_response.json()[0]["job_ids"], [job_id])
 
-        # Delete job and verify it is unlinked from project
         del_response = self.client.delete(f"/api/jobs/{job_id}")
         self.assertEqual(del_response.status_code, 200)
-        
-        # Project job list should now be empty
+
         list_response2 = self.client.get("/api/projects")
         self.assertEqual(list_response2.json()[0]["job_ids"], [])
+
+    def test_batch_upload_ordered_files_and_unknown_project(self) -> None:
+        # Unknown project returns 404
+        response_404 = self.client.post(
+            "/api/translate",
+            files=[
+                ("files", ("001.png", io.BytesIO(TINY_PNG), "image/png")),
+            ],
+            data={"project_id": "nonexistent-project-id"},
+        )
+        self.assertEqual(response_404.status_code, 404)
+
+        # Create real project
+        proj_response = self.client.post("/api/projects", json={"name": "Batch Chapter"})
+        project_id = proj_response.json()["id"]
+
+        # Upload batch of 3 files
+        batch_files = [
+            ("files", ("page01.png", io.BytesIO(TINY_PNG), "image/png")),
+            ("files", ("page02.png", io.BytesIO(TINY_PNG), "image/png")),
+            ("files", ("page03.png", io.BytesIO(TINY_PNG), "image/png")),
+        ]
+        response = self.client.post(
+            "/api/translate",
+            files=batch_files,
+            data={"project_id": project_id},
+        )
+        self.assertEqual(response.status_code, 202)
+        jobs = response.json()["jobs"]
+        self.assertEqual(len(jobs), 3)
+
+        filenames = [j["filename"] for j in jobs]
+        self.assertEqual(filenames, ["page01.png", "page02.png", "page03.png"])
+
+        sequence_ids = [j["sequence_id"] for j in jobs]
+        self.assertEqual(sequence_ids, [0, 1, 2])
+
+        # Verify list jobs filtered by project_id
+        jobs_res = self.client.get(f"/api/jobs?project_id={project_id}")
+        self.assertEqual(jobs_res.status_code, 200)
+        proj_jobs = jobs_res.json()
+        self.assertEqual([j["sequence_id"] for j in proj_jobs], [0, 1, 2])
+
+    def test_batch_upload_atomic_rollback_on_invalid_file(self) -> None:
+        proj_response = self.client.post("/api/projects", json={"name": "Rollback Test"})
+        project_id = proj_response.json()["id"]
+
+        batch_files = [
+            ("files", ("page01.png", io.BytesIO(TINY_PNG), "image/png")),
+            ("files", ("invalid.txt", io.BytesIO(b"invalid text"), "text/plain")),
+        ]
+        response = self.client.post(
+            "/api/translate",
+            files=batch_files,
+            data={"project_id": project_id},
+        )
+        self.assertEqual(response.status_code, 415)
+
+        # Confirm no jobs created
+        jobs_res = self.client.get(f"/api/jobs?project_id={project_id}")
+        self.assertEqual(jobs_res.json(), [])
 
 
 if __name__ == "__main__":

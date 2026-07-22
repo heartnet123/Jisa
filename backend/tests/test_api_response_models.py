@@ -48,10 +48,11 @@ class ApiResponseModelTests(unittest.TestCase):
         schemas = spec["components"]["schemas"]
         self.assertEqual(
             set(schemas["TranslateJobResponse"]["properties"]),
-            {"id", "status"},
+            {"id", "status", "jobs"},
         )
         self.assertIn("original_url", schemas["JobStatus"]["properties"])
         self.assertIn("result_url", schemas["JobStatus"]["properties"])
+        self.assertIn("inpainted_url", schemas["JobStatus"]["properties"])
         self.assertIn("error", schemas["JobStatus"]["properties"])
         self.assertEqual(
             schemas["BlockItem"]["properties"]["box"]["$ref"],
@@ -61,7 +62,6 @@ class ApiResponseModelTests(unittest.TestCase):
         self.assertEqual(set(normalized_box), {"x", "y", "width", "height"})
         self.assertNotIn("ocr_text", schemas["JobStatus"]["properties"])
         self.assertNotIn("translated_text", schemas["JobStatus"]["properties"])
-        self.assertNotIn("inpainted_url", schemas["JobStatus"]["properties"])
 
     def test_hydration_preserves_review_jobs_and_fails_interrupted_jobs(self) -> None:
         self._test_repository.save_job(
@@ -142,9 +142,9 @@ class ApiResponseModelTests(unittest.TestCase):
         self.assertEqual(body["error"], "OCR service unavailable")
         self.assertEqual(body["original_url"], "/uploads/source.png")
         self.assertEqual(body["result_url"], "/uploads/final.png")
+        self.assertEqual(body["inpainted_url"], "/uploads/inpainted.png")
         self.assertNotIn("ocr_text", body)
         self.assertNotIn("translated_text", body)
-        self.assertNotIn("inpainted_url", body)
 
     def test_status_response_includes_blocks_when_present(self) -> None:
         main.jobs_db["job-2"] = {

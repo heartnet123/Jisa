@@ -369,9 +369,28 @@ def hydrate_repository_state() -> None:
         projects_db[project["id"]] = project
 
 
+class BatchTranslateJobItem(BaseModel):
+    id: str
+    filename: str
+    status: str
+    progress: int
+    project_id: str | None = None
+    sequence_id: int | None = None
+    original_url: str | None = None
+    result_url: str | None = None
+    inpainted_url: str | None = None
+    message: str | None = None
+    error: str | None = None
+
+
+class BatchTranslateResponse(BaseModel):
+    jobs: List[BatchTranslateJobItem]
+
+
 class TranslateJobResponse(BaseModel):
     id: str
     status: str
+    jobs: List[BatchTranslateJobItem] | None = None
 
 
 class NormalizedBox(BaseModel):
@@ -453,8 +472,10 @@ class JobStatus(BaseModel):
     error: str | None = None
     result_url: str | None = None
     original_url: str | None = None
+    inpainted_url: str | None = None
     blocks: List[BlockItem] | None = None
     project_id: str | None = None
+    sequence_id: int | None = None
     region_mode: Literal["detected", "manual_override"] = "detected"
     mask_preview_url: str | None = None
     preview_revision: int = 0
@@ -917,64 +938,119 @@ def _verify_image_signature(content: bytes) -> bool:
 async def translate_manga(
     request: Request,
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
+    files: list[UploadFile] | None = File(None),
+    file: UploadFile | None = File(None),
     project_id: str | None = Form(None)
 ):
-    job_id = str(uuid.uuid4())
-    byok_config = extract_byok_config(request)
-
-    if file.content_type not in ALLOWED_IMAGE_CONTENT_TYPES:
-        raise HTTPException(
-            status_code=415,
-            detail=f"Unsupported media type: {file.content_type or 'unknown'}",
-        )
-
-    # Save file locally
-    normalized_filename, file_ext = _normalize_upload_filename(file.filename)
-    file_ext = file_ext or ".png"
-    filename = f"{job_id}{file_ext}"
-    file_path = UPLOAD_DIR / filename
-
-    content = await file.read()
-    if len(content) > MAX_UPLOAD_SIZE_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File exceeds the {MAX_UPLOAD_SIZE_BYTES // (1024 * 1024)}MB limit",
-        )
-
-    if not _verify_image_signature(content):
-        raise HTTPException(
-            status_code=415,
-            detail="Unsupported media type: invalid image signature",
-        )
-
-    with open(file_path, "wb") as buffer:
-        buffer.write(content)
-
-    # Store initial state
-    jobs_db[job_id] = {
-        "id": job_id,
-        "filename": normalized_filename,
-        "status": "queued",
-        "progress": 0,
-        "message": "Queued for translation.",
-        "original_url": _to_public_url(file_path),
-        "project_id": project_id,
-        "region_mode": "detected",
-        "byok_config": byok_config,
-    }
-
-    if project_id and project_id in projects_db:
-        projects_db[project_id]["job_ids"].append(job_id)
-        if "page_order" not in projects_db[project_id]:
-            projects_db[project_id]["page_order"] = list(projects_db[project_id]["job_ids"])
+    file_list: list[UploadFile] = []
+    if files:
+        if isinstance(files, list):
+            file_list.extend(files)
         else:
-            projects_db[project_id]["page_order"].append(job_id)
+            file_list.append(files)
+    if file and file not in file_list:
+        file_list.append(file)
 
-    background_tasks.add_task(process_manga_task, job_id, str(file_path), byok_config=byok_config)
-    await notify_state_change()
+    if not file_list:
+        raise HTTPException(status_code=400, detail="No upload files provided.")
 
-    return {"id": job_id, "status": "queued"}
+    if project_id and project_id not in projects_db:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    byok_config = extract_byok_config(request)
+    staged: list[tuple[UploadFile, bytes, Path, str, str]] = []
+
+    try:
+        for upload_file in file_list:
+            if upload_file.content_type not in ALLOWED_IMAGE_CONTENT_TYPES:
+                raise HTTPException(
+                    status_code=415,
+                    detail=f"Unsupported media type: {upload_file.content_type or 'unknown'}",
+                )
+
+            content = await upload_file.read()
+            if len(content) > MAX_UPLOAD_SIZE_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File exceeds the {MAX_UPLOAD_SIZE_BYTES // (1024 * 1024)}MB limit",
+                )
+
+            if not _verify_image_signature(content):
+                raise HTTPException(
+                    status_code=415,
+                    detail="Unsupported media type: invalid image signature",
+                )
+
+            normalized_filename, file_ext = _normalize_upload_filename(upload_file.filename)
+            file_ext = file_ext or ".png"
+            temp_filename = f"temp_{uuid.uuid4()}{file_ext}"
+            temp_path = UPLOAD_DIR / temp_filename
+
+            with open(temp_path, "wb") as buffer:
+                buffer.write(content)
+
+            staged.append((upload_file, content, temp_path, normalized_filename, file_ext))
+    except Exception:
+        for _, _, temp_path, _, _ in staged:
+            if temp_path.exists():
+                try:
+                    temp_path.unlink()
+                except Exception:
+                    pass
+        raise
+
+    jobs_to_create: list[dict[str, Any]] = []
+    file_paths_for_tasks: list[tuple[str, Path]] = []
+
+    for upload_file, content, temp_path, normalized_filename, file_ext in staged:
+        job_id = str(uuid.uuid4())
+        final_filename = f"{job_id}{file_ext}"
+        final_path = UPLOAD_DIR / final_filename
+
+        temp_path.rename(final_path)
+
+        job_dict = {
+            "id": job_id,
+            "filename": normalized_filename,
+            "status": "queued",
+            "progress": 0,
+            "message": "Queued for translation.",
+            "original_url": _to_public_url(final_path),
+            "project_id": project_id,
+            "region_mode": "detected",
+            "byok_config": byok_config,
+        }
+        jobs_to_create.append(job_dict)
+        file_paths_for_tasks.append((job_id, final_path))
+
+    if project_id:
+        created_jobs = repository.create_project_jobs(project_id, jobs_to_create)
+        for j in created_jobs:
+            jobs_db[j["id"]] = j
+        proj_repo = [p for p in repository.load_projects() if p["id"] == project_id]
+        if proj_repo:
+            projects_db[project_id]["job_ids"] = proj_repo[0]["job_ids"]
+            projects_db[project_id]["page_order"] = proj_repo[0]["page_order"]
+    else:
+        for j in jobs_to_create:
+            repository.save_job(j)
+            jobs_db[j["id"]] = j
+        created_jobs = jobs_to_create
+
+    for job_id, final_path in file_paths_for_tasks:
+        background_tasks.add_task(process_manga_task, job_id, str(final_path), byok_config=byok_config)
+
+    await notify_state_change(
+        job_ids=[j["id"] for j in created_jobs],
+        project_ids=[project_id] if project_id else None,
+    )
+
+    first_job_id = created_jobs[0]["id"] if created_jobs else ""
+    return {
+        "id": first_job_id,
+        "status": "queued",
+        "jobs": created_jobs,
+    }
 
 
 @app.get("/api/byok/providers")
@@ -1402,17 +1478,28 @@ async def sandbox_translate(payload: SandboxPayload):
 
 
 @app.get("/api/jobs")
-async def list_jobs():
-
-    """Returns a list of all jobs, omitting blocks_obj to keep response size lightweight."""
+async def list_jobs(project_id: str | None = None):
+    """Returns a list of jobs, optionally filtered by project_id and ordered by sequence_id."""
     result = []
-    for job_id, job in jobs_db.items():
-        job_copy = job.copy()
-        job_copy["status"] = _status_for_api(job_copy.get("status", "queued"))
-        if "blocks_obj" in job_copy:
-            del job_copy["blocks_obj"]
-        result.append(job_copy)
-    return result[::-1]
+    if project_id is not None:
+        db_jobs = repository.load_jobs(project_id=project_id)
+        for repo_job in db_jobs:
+            job_id = repo_job["id"]
+            job = jobs_db.get(job_id, repo_job)
+            job_copy = job.copy()
+            job_copy["status"] = _status_for_api(job_copy.get("status", "queued"))
+            if "blocks_obj" in job_copy:
+                del job_copy["blocks_obj"]
+            result.append(job_copy)
+        return result
+    else:
+        for job_id, job in jobs_db.items():
+            job_copy = job.copy()
+            job_copy["status"] = _status_for_api(job_copy.get("status", "queued"))
+            if "blocks_obj" in job_copy:
+                del job_copy["blocks_obj"]
+            result.append(job_copy)
+        return result[::-1]
 
 
 @app.post("/api/projects", response_model=ProjectResponse, status_code=201)
@@ -1427,15 +1514,15 @@ async def create_project(payload: ProjectCreatePayload):
         "page_order": []
     }
     projects_db[project_id] = project
-    await notify_state_change()
+    await notify_state_change(project_ids=[project_id])
     return project
 
 
 @app.get("/api/projects", response_model=List[ProjectResponse])
 async def list_projects():
-    for proj in projects_db.values():
-        if "page_order" not in proj:
-            proj["page_order"] = list(proj["job_ids"])
+    db_projects = repository.load_projects()
+    for proj in db_projects:
+        projects_db[proj["id"]] = proj
     return list(projects_db.values())[::-1]
 
 
@@ -1443,18 +1530,16 @@ async def list_projects():
 async def reorder_project_pages(project_id: str, payload: ReorderPayload):
     if project_id not in projects_db:
         raise HTTPException(status_code=404, detail="Project not found")
-    project = projects_db[project_id]
-    
-    # Ensure job_ids lists match page_order elements (must be same set of elements)
-    if set(payload.page_order) != set(project["job_ids"]):
-         raise HTTPException(
-             status_code=400, 
-             detail="page_order must contain exactly the project's job IDs"
-         )
-    
-    project["page_order"] = payload.page_order
-    await notify_state_change()
-    return project
+
+    try:
+        new_order = repository.reorder_project(project_id, payload.page_order)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    projects_db[project_id]["page_order"] = new_order
+    projects_db[project_id]["job_ids"] = new_order
+    await notify_state_change(project_ids=[project_id])
+    return projects_db[project_id]
 
 
 @app.put("/api/projects/{project_id}", response_model=ProjectResponse)
@@ -1524,8 +1609,17 @@ async def delete_job(job_id: str):
         (UPLOAD_DIR / preview_name).unlink(missing_ok=True)
 
     del jobs_db[job_id]
-    repository.delete_job(job_id)
-    await notify_state_change()
+    repository.delete_job_and_compact(job_id)
+    if project_id and project_id in projects_db:
+        proj_repo = [p for p in repository.load_projects() if p["id"] == project_id]
+        if proj_repo:
+            projects_db[project_id]["job_ids"] = proj_repo[0]["job_ids"]
+            projects_db[project_id]["page_order"] = proj_repo[0]["page_order"]
+        else:
+            projects_db[project_id]["job_ids"] = [jid for jid in projects_db[project_id]["job_ids"] if jid != job_id]
+            projects_db[project_id]["page_order"] = [jid for jid in projects_db[project_id].get("page_order", []) if jid != job_id]
+
+    await notify_state_change(project_ids=[project_id] if project_id else None)
     return {"status": "deleted", "job_id": job_id}
 
 

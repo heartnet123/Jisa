@@ -527,27 +527,19 @@ class SQLiteReviewRepository:
             projects = []
             for row in rows:
                 proj_id = row["id"]
-                # Derive job_ids and page_order from jobs table ordered by sequence_id
                 job_rows = self._connection.execute(
                     "SELECT id FROM jobs WHERE project_id = ? ORDER BY sequence_id, created_at, rowid",
                     (proj_id,),
                 ).fetchall()
                 derived_ids = [j["id"] for j in job_rows]
 
-                # Fallback to JSON if no jobs attached yet or to preserve unattached ids
-                legacy_job_ids = json.loads(row["job_ids_json"])
-                legacy_page_order = json.loads(row["page_order_json"])
-
-                job_ids = derived_ids if derived_ids else legacy_job_ids
-                page_order = derived_ids if derived_ids else legacy_page_order
-
                 projects.append(
                     {
                         "id": proj_id,
                         "name": row["name"],
                         "created_at": row["created_at"],
-                        "job_ids": job_ids,
-                        "page_order": page_order,
+                        "job_ids": derived_ids,
+                        "page_order": derived_ids,
                     }
                 )
         return projects
