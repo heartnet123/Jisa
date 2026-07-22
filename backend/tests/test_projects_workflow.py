@@ -163,6 +163,61 @@ class ProjectSessionWorkflowTests(unittest.TestCase):
         job_status = self.client.get(f"/api/status/{job_id}")
         self.assertEqual(job_status.status_code, 404)
 
+    def test_fifteen_page_batch_session_lifecycle_and_index_performance(self) -> None:
+        import time
+
+        create_res = self.client.post("/api/projects", json={"name": "Vol 1 Chapter 15"})
+        self.assertEqual(create_res.status_code, 201)
+        project_id = create_res.json()["id"]
+
+        batch_files = [
+            ("files", (f"page_{i+1:03d}.png", io.BytesIO(TINY_PNG), "image/png"))
+            for i in range(15)
+        ]
+        upload_res = self.client.post(
+            "/api/translate",
+            files=batch_files,
+            data={"project_id": project_id},
+        )
+        self.assertEqual(upload_res.status_code, 202)
+        jobs = upload_res.json()["jobs"]
+        self.assertEqual(len(jobs), 15)
+        self.assertEqual([j["sequence_id"] for j in jobs], list(range(15)))
+
+        latencies = []
+        for _ in range(50):
+            start = time.perf_counter()
+            res = self.client.get(f"/api/jobs?project_id={project_id}")
+            latencies.append((time.perf_counter() - start) * 1000)
+            self.assertEqual(res.status_code, 200)
+
+        latencies.sort()
+        p95_ms = latencies[int(len(latencies) * 0.95)]
+        self.assertLess(p95_ms, 50.0, f"p95 query latency should be under 50ms, got {p95_ms:.2f}ms")
+
+        job_ids = [j["id"] for j in jobs]
+        reversed_ids = list(reversed(job_ids))
+        reorder_res = self.client.put(
+            f"/api/projects/{project_id}/reorder",
+            json={"page_order": reversed_ids},
+        )
+        self.assertEqual(reorder_res.status_code, 200)
+        self.assertEqual(reorder_res.json()["page_order"], reversed_ids)
+
+        middle_job_id = reversed_ids[5]
+        del_job_res = self.client.delete(f"/api/jobs/{middle_job_id}")
+        self.assertEqual(del_job_res.status_code, 200)
+
+        remaining_res = self.client.get(f"/api/jobs?project_id={project_id}")
+        self.assertEqual(remaining_res.status_code, 200)
+        remaining_jobs = remaining_res.json()
+        self.assertEqual(len(remaining_jobs), 14)
+        self.assertEqual([j["sequence_id"] for j in remaining_jobs], list(range(14)))
+
+        del_proj_res = self.client.delete(f"/api/projects/{project_id}")
+        self.assertEqual(del_proj_res.status_code, 200)
+        self.assertEqual(del_proj_res.json()["status"], "deleted")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1536,9 +1536,13 @@ async def reorder_project_pages(project_id: str, payload: ReorderPayload):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
+    for idx, jid in enumerate(new_order):
+        if jid in jobs_db:
+            jobs_db[jid]["sequence_id"] = idx
+
     projects_db[project_id]["page_order"] = new_order
     projects_db[project_id]["job_ids"] = new_order
-    await notify_state_change(project_ids=[project_id])
+    await notify_state_change(project_ids=[project_id], job_ids=new_order)
     return projects_db[project_id]
 
 
@@ -1666,6 +1670,12 @@ async def delete_job(job_id: str):
 
     del jobs_db[job_id]
     repository.delete_job_and_compact(job_id)
+    if project_id:
+        db_jobs = repository.load_jobs(project_id=project_id)
+        for repo_job in db_jobs:
+            if repo_job["id"] in jobs_db:
+                jobs_db[repo_job["id"]]["sequence_id"] = repo_job["sequence_id"]
+
     if project_id and project_id in projects_db:
         proj_repo = [p for p in repository.load_projects() if p["id"] == project_id]
         if proj_repo:
