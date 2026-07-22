@@ -73,3 +73,10 @@ backend/.omc/
 ROADMAP.html
 .omo/
 ARCHITECTURE_REVIEW.md
+
+# Local Docs & Plans
+docs/plans/
+MEMORY.md
+prototype.html
+
+

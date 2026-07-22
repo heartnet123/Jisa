@@ -304,14 +304,14 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
   const controlsDisabled = isSavingRegions || isSubmitting || activeRegionAction !== null;
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col overflow-hidden bg-[#060606]/95 font-sans backdrop-blur-md selection:bg-cyan-500/30">
-      <header className="z-10 flex items-center justify-between gap-3 border-b border-[#222] bg-[#0c0c0c] px-3 py-3 sm:px-6 sm:py-4">
+    <div className="fixed inset-0 z-50 flex flex-col overflow-hidden bg-app font-sans selection:bg-accent-surface">
+      <header className="z-10 flex items-center justify-between gap-3 border-b border-border bg-surface px-3 py-3 sm:px-6 sm:py-4">
         <div className="flex min-w-0 items-center gap-3">
-          <Icon icon="mdi:translate" className="text-xl text-cyan-500" />
-          <h2 className="hidden font-mono text-lg font-bold uppercase tracking-tight sm:block">
-            Translation Studio <span className="text-[#555]">{'//'}</span> HITL Review
+          <Icon icon="solar:translation-2-linear" className="text-xl text-accent" />
+          <h2 className="hidden font-mono text-lg font-bold uppercase tracking-tight sm:block text-main">
+            Translation Studio <span className="text-muted">{'//'}</span> HITL Review
           </h2>
-          <span className="truncate rounded border border-cyan-800/50 bg-cyan-950 px-2 py-0.5 font-mono text-[10px] text-cyan-400">
+          <span className="truncate rounded border border-accent/30 bg-accent-surface px-2 py-0.5 font-mono text-xs text-accent font-medium">
             {item.filename}
           </span>
         </div>
@@ -319,9 +319,9 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
         <button
           type="button"
           onClick={onClose}
-          className="flex items-center gap-1.5 rounded border border-[#333] p-2 font-mono text-sm uppercase tracking-widest transition-colors hover:border-red-500 hover:bg-red-500/5 hover:text-red-500"
+          className="flex min-h-11 items-center gap-1.5 rounded border border-border bg-surface px-3 py-2 font-mono text-xs font-bold uppercase tracking-widest text-main transition-colors hover:border-red-500 hover:bg-red-500/10 hover:text-red-500"
         >
-          <Icon icon="mdi:close" />
+          <Icon icon="solar:close-square-linear" />
           Exit
         </button>
       </header>
@@ -343,12 +343,12 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
           />
         </div>
 
-        <aside className="flex h-[45%] w-full flex-col overflow-hidden border-t border-[#222] bg-[#0c0c0c] lg:h-auto lg:w-[480px] lg:border-l lg:border-t-0">
-          <div className="flex items-center justify-between border-b border-[#222] bg-[#0e0e0e] p-4">
-            <span className="font-mono text-xs font-bold uppercase tracking-widest text-[#777]">
+        <aside className="flex h-[45%] w-full flex-col overflow-hidden border-t border-border bg-panel lg:h-auto lg:w-[480px] lg:border-l lg:border-t-0">
+          <div className="flex items-center justify-between border-b border-border bg-surface p-4">
+            <span className="font-mono text-xs font-bold uppercase tracking-widest text-muted">
               Region inspector
             </span>
-            <span className="font-mono text-[10px] uppercase tracking-widest text-cyan-500">
+            <span className="font-mono text-xs uppercase tracking-widest text-accent font-bold">
               {isSavingRegions
                 ? 'Saving layout…'
                 : hasDirtyText
@@ -359,12 +359,12 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
 
           <div className="flex-1 space-y-4 overflow-y-auto p-4">
             {blocks.length === 0 ? (
-              <div role="status" className="border border-dashed border-[#333] p-6 text-center">
-                <Icon icon="mdi:vector-rectangle" className="mb-2 text-2xl text-[#555]" />
-                <p className="font-mono text-xs uppercase tracking-wider text-[#777]">
+              <div role="status" className="border border-dashed border-border bg-surface p-6 text-center rounded">
+                <Icon icon="solar:crop-minimalistic-linear" className="mb-2 text-2xl text-muted" />
+                <p className="font-mono text-xs uppercase tracking-wider text-muted font-medium">
                   No text regions
                 </p>
-                <p className="mt-2 text-xs text-[#555]">
+                <p className="mt-2 text-xs text-subtle">
                   Choose Add region, then drag over a speech bubble.
                 </p>
               </div>
@@ -396,16 +396,16 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
             </AnimatePresence>
           </div>
 
-          <div className="space-y-3 border-t border-[#222] bg-[#0d0d0d] p-4">
+          <div className="space-y-3 border-t border-border bg-surface p-4">
             {submitError ? (
-              <div role="alert" className="flex items-center gap-2 border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-400">
-                <Icon icon="mdi:alert" className="text-base" />
+              <div role="alert" className="flex items-center gap-2 border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-500 rounded">
+                <Icon icon="solar:danger-triangle-linear" className="text-base" />
                 <span>{submitError}</span>
               </div>
             ) : null}
             {regionError ? (
-              <div role="alert" className="flex items-center gap-2 border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-400">
-                <Icon icon="mdi:alert" className="text-base" />
+              <div role="alert" className="flex items-center gap-2 border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-500 rounded">
+                <Icon icon="solar:danger-triangle-linear" className="text-base" />
                 <span>{regionError}</span>
               </div>
             ) : null}
@@ -414,7 +414,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
               type="button"
               onClick={handleApprove}
               disabled={controlsDisabled}
-              className="flex w-full items-center justify-center gap-2 bg-cyan-500 py-3 font-mono font-bold uppercase tracking-widest text-black shadow-lg shadow-cyan-500/20 transition-colors hover:bg-cyan-400 disabled:bg-[#222] disabled:text-[#666] disabled:shadow-none"
+              className="flex min-h-11 w-full items-center justify-center gap-2 rounded bg-accent py-3 font-mono text-xs font-bold uppercase tracking-widest text-white transition-colors hover:bg-accent-hover disabled:bg-panel disabled:text-muted"
             >
               {isSubmitting ? (
                 <>
@@ -423,7 +423,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
                 </>
               ) : (
                 <>
-                  <Icon icon="mdi:check-decagram" className="text-lg" />
+                  <Icon icon="solar:check-circle-linear" className="text-lg" />
                   ยืนยัน
                 </>
               )}

@@ -47,27 +47,27 @@ export function RegionInspectorCard({
       onClick={() => onSelect(block.id)}
       className={`border p-4 transition-colors ${
         selected
-          ? "border-cyan-500/60 bg-[#151b22]"
-          : "border-[#222] bg-[#0d0d0d] hover:border-[#333]"
+          ? "border-accent/60 bg-accent-surface"
+          : "border-border bg-panel hover:border-border-strong"
       }`}
     >
       <div className="mb-3 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <span className="border border-cyan-500/20 bg-cyan-500/10 px-2 py-0.5 font-mono text-[10px] font-bold text-cyan-400">
+          <span className="border border-accent/20 bg-accent-surface px-2 py-0.5 font-mono text-[10px] font-bold text-accent">
             Region {index + 1}
           </span>
-          <span className="font-mono text-[9px] uppercase tracking-wider text-[#666]">
+          <span className="font-mono text-xs uppercase tracking-wider text-muted">
             {block.source}
           </span>
         </div>
         {dirty ? (
-          <span className="flex items-center gap-1 font-mono text-[9px] uppercase text-yellow-400">
-            <span className="h-1.5 w-1.5 rounded-full bg-yellow-400" />
+          <span className="flex items-center gap-1 font-mono text-xs uppercase text-yellow-500 font-medium">
+            <span className="h-1.5 w-1.5 rounded-full bg-yellow-500" />
             Unsaved
           </span>
         ) : translationValue.trim().length === 0 ? (
-          <span className="flex items-center gap-1 font-mono text-[9px] uppercase text-yellow-500">
-            <Icon icon="mdi:alert-outline" /> Empty draft
+          <span className="flex items-center gap-1 font-mono text-xs uppercase text-yellow-500 font-medium">
+            <Icon icon="solar:danger-triangle-linear" /> Empty draft
           </span>
         ) : null}
       </div>
@@ -77,7 +77,7 @@ export function RegionInspectorCard({
           <div>
             <label
               htmlFor={`source-${block.id}`}
-              className="mb-1 block font-mono text-[9px] uppercase tracking-widest text-[#777]"
+              className="mb-1 block font-mono text-xs uppercase tracking-widest text-muted font-medium"
             >
               Source text
             </label>
@@ -86,7 +86,7 @@ export function RegionInspectorCard({
               value={sourceValue}
               disabled={disabled || busy}
               onChange={event => onSourceChange(block.id, event.target.value)}
-              className="h-20 w-full resize-none border border-[#333] bg-[#101010] p-3 font-mono text-xs leading-relaxed text-[#ddd] outline-none transition-colors focus:border-cyan-500 disabled:opacity-50"
+              className="h-20 w-full resize-none border border-border bg-surface p-3 font-mono text-xs leading-relaxed text-main outline-none transition-colors focus:border-accent disabled:opacity-50"
               placeholder="Enter source text or rerun OCR"
             />
           </div>
@@ -94,7 +94,7 @@ export function RegionInspectorCard({
           <div>
             <label
               htmlFor={`translation-${block.id}`}
-              className="mb-1 block font-mono text-[9px] uppercase tracking-widest text-cyan-500/70"
+              className="mb-1 block font-mono text-xs uppercase tracking-widest text-accent font-medium"
             >
               Thai translation
             </label>
@@ -104,17 +104,17 @@ export function RegionInspectorCard({
               disabled={disabled || busy}
               onChange={event => onTranslationChange(block.id, event.target.value)}
               placeholder="พิมพ์คำแปลภาษาไทย..."
-              className="h-24 w-full resize-none border border-[#333] bg-[#121212] p-3 text-sm leading-relaxed text-cyan-50 outline-none transition-colors focus:border-cyan-500 disabled:opacity-50"
+              className="h-24 w-full resize-none border border-border bg-surface p-3 text-sm leading-relaxed text-main outline-none transition-colors focus:border-accent disabled:opacity-50"
               style={{ fontFamily: "'Sarabun', 'Segoe UI', Tahoma, sans-serif" }}
             />
           </div>
 
           {translationValue.trim().length > 0 ? (
-            <div className="border border-cyan-500/10 bg-cyan-950/10 p-3">
-              <span className="mb-1 block font-mono text-[9px] uppercase tracking-widest text-cyan-500/40">
+            <div className="border border-accent/20 bg-accent-surface p-3">
+              <span className="mb-1 block font-mono text-xs uppercase tracking-widest text-accent/80 font-medium">
                 Typesetting preview
               </span>
-              <ThaiText className="text-sm text-cyan-400">
+              <ThaiText className="text-sm text-accent font-medium">
                 {translationValue}
               </ThaiText>
             </div>
@@ -128,9 +128,9 @@ export function RegionInspectorCard({
                 event.stopPropagation();
                 onRerunOcr(block.id);
               }}
-              className="flex min-h-10 items-center justify-center gap-1 border border-[#333] px-2 font-mono text-[10px] font-bold uppercase text-cyan-400 hover:border-cyan-500 disabled:opacity-40"
+              className="flex min-h-11 items-center justify-center gap-1 border border-border bg-surface px-2 font-mono text-xs font-bold uppercase text-accent hover:border-accent disabled:opacity-40"
             >
-              <Icon icon={action === "ocr" ? "eos-icons:loading" : "mdi:text-recognition"} />
+              <Icon icon={action === "ocr" ? "eos-icons:loading" : "solar:text-square-linear"} />
               Re-OCR
             </button>
             <button
@@ -140,9 +140,9 @@ export function RegionInspectorCard({
                 event.stopPropagation();
                 onSave(block.id);
               }}
-              className="flex min-h-10 items-center justify-center gap-1 bg-cyan-500 px-2 font-mono text-[10px] font-bold uppercase text-black hover:bg-cyan-400 disabled:bg-[#222] disabled:text-[#666]"
+              className="flex min-h-11 items-center justify-center gap-1 bg-accent px-2 font-mono text-xs font-bold uppercase text-white hover:bg-accent-hover disabled:bg-panel disabled:text-muted"
             >
-              <Icon icon={action === "save" ? "eos-icons:loading" : "mdi:content-save-outline"} />
+              <Icon icon={action === "save" ? "eos-icons:loading" : "solar:diskette-linear"} />
               Save
             </button>
             <button
@@ -152,19 +152,19 @@ export function RegionInspectorCard({
                 event.stopPropagation();
                 onDelete(block.id);
               }}
-              className="flex min-h-10 items-center justify-center gap-1 border border-red-500/40 px-2 font-mono text-[10px] font-bold uppercase text-red-400 hover:border-red-400 disabled:opacity-40"
+              className="flex min-h-11 items-center justify-center gap-1 border border-red-500/40 bg-surface px-2 font-mono text-xs font-bold uppercase text-red-500 hover:border-red-500 disabled:opacity-40"
             >
-              <Icon icon={action === "delete" ? "eos-icons:loading" : "mdi:trash-can-outline"} />
+              <Icon icon={action === "delete" ? "eos-icons:loading" : "solar:trash-bin-trash-linear"} />
               Delete
             </button>
           </div>
         </div>
       ) : (
         <div className="space-y-2">
-          <p className="line-clamp-2 whitespace-pre-wrap font-mono text-xs leading-relaxed text-[#888]">
+          <p className="line-clamp-2 whitespace-pre-wrap font-mono text-xs leading-relaxed text-muted">
             {sourceValue || "No source text."}
           </p>
-          <p className="line-clamp-2 text-xs leading-relaxed text-cyan-400/70">
+          <p className="line-clamp-2 text-xs leading-relaxed text-accent">
             {translationValue || "No translation yet."}
           </p>
         </div>

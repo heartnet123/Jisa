@@ -33,12 +33,9 @@ export default function OverviewPage() {
     <>
       <header className="px-8 py-6 border-b border-[#1c1c1c] bg-[#0b0b0b]/40 flex justify-between items-center z-10 font-mono">
         <div>
-          <h2 className="text-lg font-black tracking-tight uppercase text-white flex items-center gap-2">
-            <span className="w-2.5 h-2.5 bg-cyan-500 rounded-sm"></span> Action Hub Dashboard
+          <h2 className="text-lg font-black tracking-tight uppercase text-main flex items-center gap-2 font-mono">
+            <span className="w-2.5 h-2.5 bg-accent rounded-sm"></span> Dashboard
           </h2>
-          <p className="text-[10px] text-[#666] uppercase tracking-widest mt-1">
-            Hardware health // Performance statistics // Queue Management
-          </p>
         </div>
 
         <div className="flex gap-3">
