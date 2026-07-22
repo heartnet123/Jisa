@@ -54,7 +54,7 @@ interface MangaTranslatorContextType {
   setActiveHITLItem: (item: ProcessedManga | null) => void;
 }
 
-const MangaTranslatorContext = createContext<MangaTranslatorContextType | undefined>(undefined);
+export const MangaTranslatorContext = createContext<MangaTranslatorContextType | undefined>(undefined);
 
 export const ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/bmp', 'image/tiff'];
 

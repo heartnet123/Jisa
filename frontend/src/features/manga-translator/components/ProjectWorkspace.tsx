@@ -380,17 +380,20 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
   // Filter project specific files
   let activeProjJobs = files.filter(f => f.project_id === projectId);
   
-  // Sort pages by page_order
-  if (activeProj.page_order && activeProj.page_order.length > 0) {
-    activeProjJobs = [...activeProjJobs].sort((a, b) => {
+  // Sort pages strictly by sequence_id (fallback to page_order)
+  activeProjJobs = [...activeProjJobs].sort((a, b) => {
+    if (a.sequence_id !== undefined && b.sequence_id !== undefined) {
+      return a.sequence_id - b.sequence_id;
+    }
+    if (activeProj.page_order && activeProj.page_order.length > 0) {
       const idxA = activeProj.page_order.indexOf(a.id);
       const idxB = activeProj.page_order.indexOf(b.id);
-      if (idxA === -1 && idxB === -1) return 0;
-      if (idxA === -1) return 1;
-      if (idxB === -1) return -1;
-      return idxA - idxB;
-    });
-  }
+      if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+      if (idxA !== -1) return -1;
+      if (idxB !== -1) return 1;
+    }
+    return 0;
+  });
 
   // Stats calculation
   const completedCount = activeProjJobs.filter(f => f.status === 'completed').length;
@@ -400,12 +403,10 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
   
   // Grouped pages with actual indices
   const indexedJobs = activeProjJobs.map((file, index) => ({ file, index }));
-  const needsAttention = indexedJobs.filter(item => ['awaiting_review', 'failed', 'error', 'canceled'].includes(item.file.status));
   const inPipeline = indexedJobs.filter(item => ['queued', 'segmenting', 'ocr', 'translating', 'inpainting', 'typesetting', 'uploading'].includes(item.file.status));
-  const finalized = indexedJobs.filter(item => item.file.status === 'completed');
 
   const handleDelete = async () => {
-    if (confirm(`Confirm deletion of project "${activeProj.name}"? Sheets will be unlinked but NOT deleted.`)) {
+    if (confirm(`Confirm deletion of project "${activeProj.name}"? All member pages and images will be permanently deleted from disk.`)) {
       await handleDeleteProject(projectId);
       router.push('/projects');
     }
@@ -743,102 +744,29 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
               </span>
             </div>
           ) : (
-            <div className="space-y-8">
-              {/* 1. Needs Attention list */}
-              {needsAttention.length > 0 && (
-                <div className="space-y-4">
-                  <div className="flex items-center gap-2 text-yellow-500 font-mono text-[10px] uppercase tracking-widest font-black">
-                    <span className="w-1.5 h-1.5 rounded-full bg-yellow-500" />
-                    Review Required & Failed ({needsAttention.length})
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 gap-4 pl-4 border-l border-cyan-950/30">
+                {indexedJobs.map(({ file, index }) => (
+                  <div key={file.id} className="flex items-start gap-4">
+                    <div className="flex flex-col items-center justify-center bg-[#0d0d0d] border border-[#1a1a1a] rounded p-2 min-w-[70px] h-28 shrink-0 font-mono">
+                      <span className="text-[8px] text-[#555] uppercase tracking-wider font-bold">PAGE</span>
+                      <span className="text-base font-black text-cyan-400">#{index + 1}</span>
+                      <PageOrderInput 
+                        currentIndex={index} 
+                        maxPages={activeProjJobs.length} 
+                        onMove={(targetPos) => handleMovePageTo(projectId, file.id, targetPos)} 
+                      />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <MangaFileItem 
+                        item={file} 
+                        onUpdate={handleUpdate} 
+                        onRemove={handleRemove} 
+                      />
+                    </div>
                   </div>
-                  <div className="grid grid-cols-1 gap-4 pl-4 border-l border-yellow-950/40">
-                    {needsAttention.map(({ file, index }) => (
-                      <div key={file.id} className="flex items-start gap-4">
-                        <div className="flex flex-col items-center justify-center bg-[#0d0d0d] border border-[#1a1a1a] rounded p-2 min-w-[70px] h-28 shrink-0 font-mono">
-                          <span className="text-[8px] text-[#555] uppercase tracking-wider font-bold">PAGE</span>
-                          <span className="text-base font-black text-cyan-400">#{index + 1}</span>
-                          <PageOrderInput 
-                            currentIndex={index} 
-                            maxPages={activeProjJobs.length} 
-                            onMove={(targetPos) => handleMovePageTo(projectId, file.id, targetPos)} 
-                          />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <MangaFileItem 
-                            item={file} 
-                            onUpdate={handleUpdate} 
-                            onRemove={handleRemove} 
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* 2. Pipeline processing list */}
-              {inPipeline.length > 0 && (
-                <div className="space-y-4">
-                  <div className="flex items-center gap-2 text-cyan-500/90 font-mono text-[10px] uppercase tracking-widest font-black">
-                    <span className="w-1.5 h-1.5 rounded-full bg-cyan-500 animate-pulse" />
-                    Processing Pipeline ({inPipeline.length})
-                  </div>
-                  <div className="grid grid-cols-1 gap-4 pl-4 border-l border-cyan-950/30">
-                    {inPipeline.map(({ file, index }) => (
-                      <div key={file.id} className="flex items-start gap-4">
-                        <div className="flex flex-col items-center justify-center bg-[#0d0d0d] border border-[#1a1a1a] rounded p-2 min-w-[70px] h-28 shrink-0 font-mono">
-                          <span className="text-[8px] text-[#555] uppercase tracking-wider font-bold">PAGE</span>
-                          <span className="text-base font-black text-cyan-400">#{index + 1}</span>
-                          <PageOrderInput 
-                            currentIndex={index} 
-                            maxPages={activeProjJobs.length} 
-                            onMove={(targetPos) => handleMovePageTo(projectId, file.id, targetPos)} 
-                          />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <MangaFileItem 
-                            item={file} 
-                            onUpdate={handleUpdate} 
-                            onRemove={handleRemove} 
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* 3. Completed sheets list */}
-              {finalized.length > 0 && (
-                <div className="space-y-4">
-                  <div className="flex items-center gap-2 text-green-500/95 font-mono text-[10px] uppercase tracking-widest font-black">
-                    <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
-                    Finalized Publication Sheets ({finalized.length})
-                  </div>
-                  <div className="grid grid-cols-1 gap-4 pl-4 border-l border-green-950/30">
-                    {finalized.map(({ file, index }) => (
-                      <div key={file.id} className="flex items-start gap-4">
-                        <div className="flex flex-col items-center justify-center bg-[#0d0d0d] border border-[#1a1a1a] rounded p-2 min-w-[70px] h-28 shrink-0 font-mono">
-                          <span className="text-[8px] text-[#555] uppercase tracking-wider font-bold">PAGE</span>
-                          <span className="text-base font-black text-cyan-400">#{index + 1}</span>
-                          <PageOrderInput 
-                            currentIndex={index} 
-                            maxPages={activeProjJobs.length} 
-                            onMove={(targetPos) => handleMovePageTo(projectId, file.id, targetPos)} 
-                          />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <MangaFileItem 
-                            item={file} 
-                            onUpdate={handleUpdate} 
-                            onRemove={handleRemove} 
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+                ))}
+              </div>
             </div>
           )}
         </div>
@@ -852,3 +780,5 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
     </div>
   );
 };
+
+export default ProjectWorkspace;
