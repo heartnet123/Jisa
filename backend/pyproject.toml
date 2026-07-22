@@ -20,6 +20,7 @@ dependencies = [
     "simple-lama-inpainting>=0.1.2",
     "huggingface-hub>=0.23.0",
     "pythainlp>=5.1.2",
+    "litellm>=1.40.0",
 ]
 
 [project.scripts]
