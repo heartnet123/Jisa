@@ -27,6 +27,35 @@ function resolveUrl(url: string | undefined): string | undefined {
 }
 
 export const mangaApi = {
+  uploadBatch: async (
+    files: File[],
+    _config: TranslationConfig,
+    project_id?: string,
+  ): Promise<{ id: string; status: string; jobs?: ProcessedManga[] }> => {
+    const formData = new FormData();
+    for (const file of files) {
+      formData.append("files", file);
+    }
+    if (project_id) {
+      formData.append("project_id", project_id);
+    }
+
+    const byokHeaders = getBYOKHeaders();
+
+    const response = await axios.post<{ id: string; status: string; jobs?: ProcessedManga[] }>(
+      `${API_BASE_URL}/api/translate`,
+      formData,
+      {
+        headers: {
+          "Content-Type": "multipart/form-data",
+          ...byokHeaders,
+        },
+      },
+    );
+
+    return response.data;
+  },
+
   upload: async (
     file: File,
     _config: TranslationConfig,

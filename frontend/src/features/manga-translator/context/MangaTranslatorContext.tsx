@@ -210,12 +210,12 @@ export const MangaTranslatorProvider: React.FC<{ children: React.ReactNode }> = 
   }, []);
 
   const uploadBatch = useCallback(async (fileList: File[], projectId?: string) => {
+    if (!fileList.length) return;
     setActiveUploadCount(prev => prev + fileList.length);
 
-    const uploads = fileList.map(async (file) => {
+    const pendingItems = fileList.map((file, idx) => {
       const localUrl = URL.createObjectURL(file);
-      const pendingJobId = `${file.name}-${Date.now()}`;
-
+      const pendingJobId = `pending-${file.name}-${Date.now()}-${idx}`;
       const tempManga: ProcessedManga = {
         id: pendingJobId,
         filename: file.name,
@@ -225,49 +225,60 @@ export const MangaTranslatorProvider: React.FC<{ children: React.ReactNode }> = 
         progress: 1,
         message: 'Uploading manga page...',
         project_id: projectId,
+        sequence_id: idx,
       };
-
-      setFiles(prev => [tempManga, ...prev]);
-
-      try {
-        const response = await mangaApi.upload(file, config, projectId);
-        const newManga: ProcessedManga = {
-          id: response.id,
-          filename: file.name,
-          originalUrl: localUrl,
-          original_url: localUrl,
-          status: 'queued',
-          progress: 5,
-          message: 'Queued for processing.',
-          project_id: projectId,
-        };
-
-        setFiles(prev => {
-          if (prev.some(f => f.id === response.id)) {
-            return prev.filter(f => f.id !== pendingJobId);
-          }
-          return prev.map(f => f.id === pendingJobId ? newManga : f);
-        });
-      } catch (err) {
-        console.error('Upload failed for', file.name, err);
-        setFiles(prev => prev.map(f =>
-          f.id === pendingJobId
-            ? {
-                ...f,
-                status: 'failed',
-                progress: 0,
-                error: err instanceof Error ? err.message : 'Upload failed',
-                project_id: projectId,
-              }
-            : f,
-        ));
-      } finally {
-        setActiveUploadCount(prev => Math.max(0, prev - 1));
-      }
+      return { file, localUrl, pendingJobId, tempManga };
     });
 
-    await Promise.all(uploads);
-    
+    setFiles(prev => [...pendingItems.map(p => p.tempManga), ...prev]);
+
+    try {
+      const response = await mangaApi.uploadBatch(fileList, config, projectId);
+      const returnedJobs = response.jobs || [];
+
+      setFiles(prev => {
+        let updated = prev.filter(f => !pendingItems.some(p => p.pendingJobId === f.id));
+        returnedJobs.forEach((job, idx) => {
+          const match = pendingItems[idx];
+          const localUrl = match ? match.localUrl : undefined;
+          const newManga: ProcessedManga = {
+            ...job,
+            originalUrl: job.originalUrl || job.original_url || localUrl || '',
+            original_url: job.original_url || localUrl || '',
+            status: job.status || 'queued',
+            progress: job.progress ?? 5,
+            message: job.message || 'Queued for processing.',
+            project_id: projectId,
+            sequence_id: job.sequence_id ?? idx,
+          };
+          if (!updated.some(f => f.id === newManga.id)) {
+            updated.push(newManga);
+          }
+        });
+        return updated;
+      });
+    } catch (err) {
+      console.error('Batch upload failed:', err);
+      const errMsg = err instanceof Error ? err.message : 'Upload failed';
+      setFiles(prev =>
+        prev.map(f => {
+          const matchedPending = pendingItems.find(p => p.pendingJobId === f.id);
+          if (matchedPending) {
+            return {
+              ...f,
+              status: 'failed',
+              progress: 0,
+              error: errMsg,
+              project_id: projectId,
+            };
+          }
+          return f;
+        })
+      );
+    } finally {
+      setActiveUploadCount(prev => Math.max(0, prev - fileList.length));
+    }
+
     try {
       const health = await mangaApi.getSystemHealth();
       setSystemHealth(health);

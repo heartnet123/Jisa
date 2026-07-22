@@ -53,9 +53,16 @@ export interface ProcessedManga {
   progress: number;
   blocks?: BlockItem[];
   project_id?: string;
+  sequence_id?: number;
   region_mode?: "detected" | "manual_override";
   mask_preview_url?: string;
   preview_revision?: number;
+}
+
+export interface BatchUploadResponse {
+  id: string;
+  status: string;
+  jobs?: ProcessedManga[];
 }
 
 export interface TranslationConfig {
