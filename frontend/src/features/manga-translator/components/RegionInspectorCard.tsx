@@ -67,7 +67,7 @@ export function RegionInspectorCard({
           </span>
         ) : translationValue.trim().length === 0 ? (
           <span className="flex items-center gap-1 font-mono text-xs uppercase text-yellow-500 font-medium">
-            <Icon icon="mdi:alert-outline" /> Empty draft
+            <Icon icon="solar:danger-triangle-linear" /> Empty draft
           </span>
         ) : null}
       </div>
@@ -130,7 +130,7 @@ export function RegionInspectorCard({
               }}
               className="flex min-h-11 items-center justify-center gap-1 border border-border bg-surface px-2 font-mono text-xs font-bold uppercase text-accent hover:border-accent disabled:opacity-40"
             >
-              <Icon icon={action === "ocr" ? "eos-icons:loading" : "mdi:text-recognition"} />
+              <Icon icon={action === "ocr" ? "eos-icons:loading" : "solar:text-square-linear"} />
               Re-OCR
             </button>
             <button
@@ -142,7 +142,7 @@ export function RegionInspectorCard({
               }}
               className="flex min-h-11 items-center justify-center gap-1 bg-accent px-2 font-mono text-xs font-bold uppercase text-white hover:bg-accent-hover disabled:bg-panel disabled:text-muted"
             >
-              <Icon icon={action === "save" ? "eos-icons:loading" : "mdi:content-save-outline"} />
+              <Icon icon={action === "save" ? "eos-icons:loading" : "solar:diskette-linear"} />
               Save
             </button>
             <button
@@ -154,7 +154,7 @@ export function RegionInspectorCard({
               }}
               className="flex min-h-11 items-center justify-center gap-1 border border-red-500/40 bg-surface px-2 font-mono text-xs font-bold uppercase text-red-500 hover:border-red-500 disabled:opacity-40"
             >
-              <Icon icon={action === "delete" ? "eos-icons:loading" : "mdi:trash-can-outline"} />
+              <Icon icon={action === "delete" ? "eos-icons:loading" : "solar:trash-bin-trash-linear"} />
               Delete
             </button>
           </div>

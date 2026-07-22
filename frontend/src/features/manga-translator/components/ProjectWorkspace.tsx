@@ -216,7 +216,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
           {/* Alert regions */}
           {bootstrapError && (
             <div role="alert" className="p-4 border border-red-500/35 bg-red-500/10 rounded-lg flex items-center gap-3 text-xs font-mono text-red-500">
-              <Icon icon="mdi:alert-circle-outline" className="text-lg" />
+              <Icon icon="solar:danger-triangle-linear" className="text-lg" />
               <span>Failed to fetch projects: {bootstrapError}</span>
             </div>
           )}
@@ -262,7 +262,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
                     </>
                   ) : (
                     <>
-                      <Icon icon="mdi:folder-plus-outline" className="text-sm" />
+                      <Icon icon="solar:folder-with-files-linear" className="text-sm" />
                       Create Session
                     </>
                   )}
@@ -278,7 +278,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
                 </span>
                 <div className="relative w-full sm:w-60">
                   <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-muted">
-                    <Icon icon="mdi:magnify" />
+                    <Icon icon="solar:magnifier-linear" />
                   </span>
                   <input
                     type="text"
@@ -292,7 +292,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
 
               {projects.length === 0 ? (
                 <div className="flex flex-col items-center justify-center p-20 border border-dashed border-border bg-panel/40 rounded-lg text-center">
-                  <Icon icon="mdi:folder-open-outline" className="text-5xl text-muted mb-4" />
+                  <Icon icon="solar:folder-open-linear" className="text-5xl text-muted mb-4" />
                   <span className="font-mono text-xs text-muted uppercase tracking-widest block font-black">
                     No Active Sessions Found
                   </span>
@@ -302,7 +302,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
                 </div>
               ) : filteredProjects.length === 0 ? (
                 <div className="flex flex-col items-center justify-center p-20 border border-dashed border-border bg-panel/20 rounded-lg text-center">
-                  <Icon icon="mdi:folder-search-outline" className="text-5xl text-muted mb-4" />
+                  <Icon icon="solar:minimalistic-magnifier-linear" className="text-5xl text-muted mb-4" />
                   <span className="font-mono text-xs text-muted uppercase tracking-widest block font-black">
                     No Matching Sessions
                   </span>
@@ -328,7 +328,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
                             <span className="font-bold text-main uppercase text-sm truncate group-hover:text-accent transition-colors pr-6">
                               {proj.name}
                             </span>
-                            <Icon icon="mdi:arrow-right-thin" className="text-lg text-muted group-hover:text-accent transition-colors group-hover:translate-x-1" />
+                            <Icon icon="solar:arrow-right-linear" className="text-lg text-muted group-hover:text-accent transition-colors group-hover:translate-x-1" />
                           </div>
                           <span className="text-xs text-subtle block">ID: {proj.id}</span>
                         </div>
@@ -427,7 +427,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
             onClick={() => router.push('/projects')}
             className="flex min-h-11 items-center gap-1.5 px-3 py-1.5 border border-border bg-surface hover:bg-panel transition-all rounded text-xs font-mono uppercase tracking-widest text-main cursor-pointer focus:outline-none focus:ring-1 focus:ring-accent"
           >
-            <Icon icon="mdi:arrow-left" /> Back to projects
+            <Icon icon="solar:arrow-left-linear" /> Back to projects
           </button>
 
           <div className="flex items-center gap-3">
@@ -477,7 +477,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
                   className="p-2 min-h-11 min-w-11 bg-accent hover:bg-accent-hover text-white rounded flex items-center justify-center cursor-pointer transition-colors"
                   title="Save Name"
                 >
-                  <Icon icon="mdi:check" className="text-xs font-bold" />
+                  <Icon icon="solar:check-circle-linear" className="text-xs font-bold" />
                 </button>
                 <button
                   type="button"
@@ -488,7 +488,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
                   className="p-2 min-h-11 min-w-11 border border-border hover:border-red-500 hover:text-red-500 rounded flex items-center justify-center cursor-pointer transition-colors"
                   title="Cancel"
                 >
-                  <Icon icon="mdi:close" className="text-xs" />
+                  <Icon icon="solar:close-square-linear" className="text-xs" />
                 </button>
               </form>
             ) : (
@@ -504,7 +504,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
                   className="opacity-0 group-hover/title:opacity-100 p-1 text-muted hover:text-accent rounded transition-all cursor-pointer"
                   title="Rename Session"
                 >
-                  <Icon icon="mdi:pencil-outline" className="text-xs" />
+                  <Icon icon="solar:pen-new-square-linear" className="text-xs" />
                 </button>
               </div>
             )}
@@ -539,7 +539,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
               className="px-3 py-2 min-h-11 border border-border hover:border-red-500/50 hover:text-red-500 hover:bg-red-500/5 transition-all text-xs font-mono uppercase tracking-widest rounded flex items-center gap-1 cursor-pointer focus:outline-none focus:ring-1 focus:ring-red-500"
               title="Delete Project Session"
             >
-              <Icon icon="mdi:delete-outline" className="text-xs" />
+              <Icon icon="solar:trash-bin-trash-linear" className="text-xs" />
               Delete
             </button>
           </div>
@@ -585,16 +585,16 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
             )}
           >
             <label htmlFor="manga-file-upload" className="flex flex-col items-center justify-center cursor-pointer w-full h-full relative z-10 text-center">
-              <div className="w-12 h-12 rounded-full bg-[#111] border border-[#222] group-hover:border-cyan-500/40 flex items-center justify-center mx-auto mb-3 transition-all duration-300">
+              <div className="w-12 h-12 rounded-full bg-surface border border-border group-hover:border-accent/40 flex items-center justify-center mx-auto mb-3 transition-all duration-300">
                 <Icon 
-                  icon={isUploading ? "eos-icons:loading" : "mdi:cloud-upload-outline"}
-                  className={cn("text-2xl text-[#555] transition-colors group-hover:text-cyan-400", isDragging && "text-cyan-500 animate-pulse")}
+                  icon={isUploading ? "eos-icons:loading" : "solar:upload-minimalistic-linear"}
+                  className={cn("text-2xl text-muted transition-colors group-hover:text-accent", isDragging && "text-accent")}
                 />
               </div>
-              <h4 className="text-xs font-bold uppercase tracking-tight text-white mb-1 font-mono">
+              <h4 className="text-xs font-bold uppercase tracking-tight text-main mb-1 font-mono">
                 {isUploading ? "Uploading Batch..." : "Drop images here or click to upload"}
               </h4>
-              <p className="text-[#454545] font-mono text-[8px] uppercase tracking-wider mb-2">
+              <p className="text-subtle font-mono text-xs uppercase tracking-wider mb-2">
                 Support: PNG // JPG // WEBP // BMP // TIFF (Multi-Select)
               </p>
               <input
@@ -615,22 +615,22 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
 
           {/* Uploading Files queue list */}
           {uploadingFiles.length > 0 && (
-            <div className="border border-[#222] rounded bg-[#090909] divide-y divide-[#1c1c1c] font-mono text-[11px] mt-4">
-              <div className="p-3 text-[10px] text-[#555] uppercase tracking-wider bg-[#0d0d0d] flex justify-between items-center font-bold">
+            <div className="border border-border rounded bg-panel divide-y divide-border font-mono text-xs mt-4">
+              <div className="p-3 text-xs text-muted uppercase tracking-wider bg-surface flex justify-between items-center font-bold">
                 <span>Uploading queue (กำลังอัปโหลด)</span>
-                <span className="text-cyan-400 font-bold">{uploadingFiles.length} files</span>
+                <span className="text-accent font-bold">{uploadingFiles.length} files</span>
               </div>
               {uploadingFiles.map((file) => (
                 <div key={file.id} className="p-3 flex justify-between items-center">
                   <div className="flex items-center gap-2 min-w-0">
-                    <Icon icon="eos-icons:loading" className="animate-spin text-cyan-400 shrink-0" />
-                    <span className="text-[#888] font-bold truncate max-w-xs">{file.filename}</span>
+                    <Icon icon="eos-icons:loading" className="animate-spin text-accent shrink-0" />
+                    <span className="text-main font-bold truncate max-w-xs">{file.filename}</span>
                   </div>
                   <div className="flex items-center gap-3 shrink-0">
-                    <div className="w-24 h-1.5 bg-[#151515] rounded overflow-hidden">
-                      <div className="bg-cyan-500 h-full transition-all duration-300" style={{ width: `${file.progress}%` }} />
+                    <div className="w-24 h-1.5 bg-surface rounded overflow-hidden">
+                      <div className="bg-accent h-full transition-all duration-300" style={{ width: `${file.progress}%` }} />
                     </div>
-                    <span className="text-[10px] text-[#555] font-bold w-8 text-right">{file.progress}%</span>
+                    <span className="text-xs text-muted font-bold w-8 text-right">{file.progress}%</span>
                   </div>
                 </div>
               ))}
@@ -645,18 +645,18 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
                 animate={{ opacity: 1, height: 'auto' }}
                 exit={shouldReduceMotion ? {} : { opacity: 0, height: 0 }}
                 role="alert"
-                className="p-4 border border-yellow-500/35 bg-yellow-950/10 rounded-lg space-y-2 text-xs font-mono text-yellow-400 relative"
+                className="p-4 border border-yellow-500/35 bg-yellow-500/10 rounded-lg space-y-2 text-xs font-mono text-yellow-600 dark:text-yellow-400 relative"
               >
                 <div className="flex justify-between items-center border-b border-yellow-500/20 pb-2">
                   <span className="font-bold uppercase tracking-wider flex items-center gap-1.5">
-                    <Icon icon="mdi:alert" /> Unsupported Files Rejected
+                    <Icon icon="solar:danger-triangle-linear" /> Unsupported Files Rejected
                   </span>
                   <button
                     onClick={() => setRejectedFiles([])}
-                    className="p-1 hover:text-white rounded cursor-pointer"
+                    className="p-1 hover:text-main rounded cursor-pointer"
                     title="Dismiss alert"
                   >
-                    <Icon icon="mdi:close" />
+                    <Icon icon="solar:close-square-linear" />
                   </button>
                 </div>
                 <ul className="list-disc pl-4 space-y-1 text-[11px] leading-relaxed">

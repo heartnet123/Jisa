@@ -74,7 +74,7 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-border bg-surface">
         <div className="flex items-center gap-3">
-          <Icon icon="mdi:file-image" className="text-muted" />
+          <Icon icon="solar:file-left-linear" className="text-muted" />
           <div className="flex flex-col">
             <span className="font-mono text-xs uppercase tracking-widest text-subtle font-medium">
               Source File
@@ -158,7 +158,7 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
                   onClick={() => setIsEditorOpen(true)}
                   className="px-3 py-1.5 min-h-11 bg-accent hover:bg-accent-hover text-white transition-all text-xs font-mono font-bold uppercase tracking-widest flex items-center gap-1.5 rounded"
                 >
-                  <Icon icon="mdi:translate" />
+                  <Icon icon="solar:translation-2-linear" />
                   REVIEW
                 </button>
               )}
@@ -170,7 +170,7 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
                 )}
                 title="View AI Results"
               >
-                <Icon icon="mdi:script-text" />
+                <Icon icon="solar:document-text-linear" />
               </button>
               {item.status !== "completed" && !hasError && (
                 <button
@@ -178,7 +178,7 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
                   className="p-2.5 border border-border bg-surface text-muted hover:text-yellow-600 hover:border-yellow-500 transition-all text-xs rounded min-h-11 min-w-11 flex items-center justify-center"
                   title="Cancel Job"
                 >
-                  <Icon icon="mdi:stop-circle-outline" />
+                  <Icon icon="solar:stop-circle-linear" />
                 </button>
               )}
               <button
@@ -186,7 +186,7 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
                 className="p-2.5 border border-border bg-surface text-muted hover:text-red-500 hover:border-red-500 transition-all text-xs rounded min-h-11 min-w-11 flex items-center justify-center"
                 title="Delete Job"
               >
-                <Icon icon="mdi:delete-outline" />
+                <Icon icon="solar:trash-bin-trash-linear" />
               </button>
             </div>
           </div>
@@ -222,7 +222,7 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
                 className="absolute inset-0 p-8 flex flex-col justify-center gap-4 bg-app"
               >
                 <div className="flex items-center gap-3 text-red-500">
-                  <Icon icon="mdi:alert-octagon-outline" className="text-3xl" />
+                  <Icon icon="solar:danger-triangle-linear" className="text-3xl" />
                   <span className="text-xs uppercase tracking-widest font-black">
                     Job Stopped
                   </span>
@@ -241,7 +241,7 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
               >
                 <div className="flex flex-col items-center gap-3 text-accent">
                   <Icon
-                    icon="mdi:shield-lock-outline"
+                    icon="solar:shield-warning-linear"
                     className="text-5xl"
                   />
                   <span className="text-xs uppercase tracking-widest font-black">
@@ -261,7 +261,7 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
                   onClick={() => setIsEditorOpen(true)}
                   className="px-5 py-2.5 min-h-11 bg-accent hover:bg-accent-hover text-white font-bold uppercase tracking-widest text-xs font-mono transition-all duration-200 flex items-center gap-2 cursor-pointer rounded"
                 >
-                  <Icon icon="mdi:translate" className="text-sm" />
+                  <Icon icon="solar:translation-2-linear" className="text-sm" />
                   Enter Translation Studio
                 </button>
               </motion.div>

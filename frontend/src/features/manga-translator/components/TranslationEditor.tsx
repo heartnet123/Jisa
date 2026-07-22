@@ -307,7 +307,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     <div className="fixed inset-0 z-50 flex flex-col overflow-hidden bg-app font-sans selection:bg-accent-surface">
       <header className="z-10 flex items-center justify-between gap-3 border-b border-border bg-surface px-3 py-3 sm:px-6 sm:py-4">
         <div className="flex min-w-0 items-center gap-3">
-          <Icon icon="mdi:translate" className="text-xl text-accent" />
+          <Icon icon="solar:translation-2-linear" className="text-xl text-accent" />
           <h2 className="hidden font-mono text-lg font-bold uppercase tracking-tight sm:block text-main">
             Translation Studio <span className="text-muted">{'//'}</span> HITL Review
           </h2>
@@ -321,7 +321,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
           onClick={onClose}
           className="flex min-h-11 items-center gap-1.5 rounded border border-border bg-surface px-3 py-2 font-mono text-xs font-bold uppercase tracking-widest text-main transition-colors hover:border-red-500 hover:bg-red-500/10 hover:text-red-500"
         >
-          <Icon icon="mdi:close" />
+          <Icon icon="solar:close-square-linear" />
           Exit
         </button>
       </header>
@@ -360,7 +360,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
           <div className="flex-1 space-y-4 overflow-y-auto p-4">
             {blocks.length === 0 ? (
               <div role="status" className="border border-dashed border-border bg-surface p-6 text-center rounded">
-                <Icon icon="mdi:vector-rectangle" className="mb-2 text-2xl text-muted" />
+                <Icon icon="solar:crop-minimalistic-linear" className="mb-2 text-2xl text-muted" />
                 <p className="font-mono text-xs uppercase tracking-wider text-muted font-medium">
                   No text regions
                 </p>
@@ -399,13 +399,13 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
           <div className="space-y-3 border-t border-border bg-surface p-4">
             {submitError ? (
               <div role="alert" className="flex items-center gap-2 border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-500 rounded">
-                <Icon icon="mdi:alert" className="text-base" />
+                <Icon icon="solar:danger-triangle-linear" className="text-base" />
                 <span>{submitError}</span>
               </div>
             ) : null}
             {regionError ? (
               <div role="alert" className="flex items-center gap-2 border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-500 rounded">
-                <Icon icon="mdi:alert" className="text-base" />
+                <Icon icon="solar:danger-triangle-linear" className="text-base" />
                 <span>{regionError}</span>
               </div>
             ) : null}
@@ -423,7 +423,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
                 </>
               ) : (
                 <>
-                  <Icon icon="mdi:check-decagram" className="text-lg" />
+                  <Icon icon="solar:check-circle-linear" className="text-lg" />
                   ยืนยัน
                 </>
               )}

@@ -427,7 +427,7 @@ export function RegionCanvas({
               : "border-[#333] text-cyan-400 hover:border-cyan-500"
           }`}
         >
-          <Icon icon="mdi:vector-rectangle" />
+          <Icon icon="solar:crop-minimalistic-linear" />
           {addMode ? "Draw on page" : "Add region"}
         </button>
         <button
@@ -436,7 +436,7 @@ export function RegionCanvas({
           onClick={deleteSelected}
           className="flex min-h-10 items-center gap-2 border border-[#333] px-3 font-mono text-[11px] font-bold uppercase tracking-wider text-red-400 transition-colors hover:border-red-500 disabled:cursor-not-allowed disabled:opacity-35"
         >
-          <Icon icon="mdi:trash-can-outline" />
+          <Icon icon="solar:trash-bin-trash-linear" />
           Delete
         </button>
         <button
@@ -451,8 +451,8 @@ export function RegionCanvas({
               maskPreviewState === "loading"
                 ? "eos-icons:loading"
                 : showMaskPreview
-                  ? "mdi:eye-off-outline"
-                  : "mdi:eye-outline"
+                  ? "solar:eye-closed-linear"
+                  : "solar:eye-linear"
             }
           />
           {maskPreviewState === "stale"
