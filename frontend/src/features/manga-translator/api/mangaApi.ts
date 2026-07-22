@@ -9,6 +9,8 @@ import type {
   TranslationConfig,
 } from "../types";
 
+import { getBYOKHeaders } from "./byok";
+
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
@@ -36,10 +38,17 @@ export const mangaApi = {
       formData.append("project_id", project_id);
     }
 
+    const byokHeaders = getBYOKHeaders();
+
     const response = await axios.post<UploadResponse>(
       `${API_BASE_URL}/api/translate`,
       formData,
-      { headers: { "Content-Type": "multipart/form-data" } },
+      {
+        headers: {
+          "Content-Type": "multipart/form-data",
+          ...byokHeaders,
+        },
+      },
     );
 
     return response.data;

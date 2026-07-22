@@ -6,7 +6,10 @@ import { Icon } from '@iconify-icon/react';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { useMangaTranslator, ALLOWED_IMAGE_TYPES } from '../context/MangaTranslatorContext';
 import { MangaFileItem } from './MangaFileItem';
+import { BYOKSettingsModal } from './BYOKSettingsModal';
 import { mangaApi } from '../api/mangaApi';
+import { getBYOKConfig } from '../api/byok';
+import { BYOKConfig } from '../types/byok';
 
 interface ProjectWorkspaceProps {
   projectId?: string;
@@ -89,6 +92,14 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
 
   // Local state for invalid file alerts
   const [rejectedFiles, setRejectedFiles] = useState<string[]>([]);
+
+  // BYOK Modal state
+  const [isBYOKModalOpen, setIsBYOKModalOpen] = useState(false);
+  const [byokConfig, setByokConfig] = useState<BYOKConfig | null>(null);
+
+  useEffect(() => {
+    setByokConfig(getBYOKConfig());
+  }, []);
 
   // Find active project
   const activeProj = projectId ? projects.find(p => p.id === projectId) : null;
@@ -419,9 +430,24 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
             <Icon icon="mdi:arrow-left" /> Back to projects
           </button>
 
-          <span className="text-[10px] text-[#444] font-mono uppercase tracking-widest">
-            Project-First Session Workspace
-          </span>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setIsBYOKModalOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 border border-violet-500/30 bg-violet-600/10 hover:bg-violet-600/20 text-violet-300 transition-all rounded text-[10px] font-mono uppercase tracking-widest cursor-pointer focus:outline-none focus:ring-1 focus:ring-violet-500 shadow-sm"
+            >
+              <Icon icon="solar:key-minimalistic-square-bold-duotone" className="text-sm text-violet-400" />
+              <span>BYOK AI Key</span>
+              {byokConfig && (
+                <span className="ml-1 px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-200 text-[9px] font-bold border border-violet-500/30">
+                  {byokConfig.provider}:{byokConfig.model}
+                </span>
+              )}
+            </button>
+
+            <span className="text-[10px] text-[#444] font-mono uppercase tracking-widest hidden sm:inline">
+              Project-First Session Workspace
+            </span>
+          </div>
         </div>
 
         {/* Project Header Info and Stats */}
@@ -817,6 +843,12 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
           )}
         </div>
       </motion.div>
+
+      <BYOKSettingsModal
+        isOpen={isBYOKModalOpen}
+        onClose={() => setIsBYOKModalOpen(false)}
+        onConfigSaved={(cfg) => setByokConfig(cfg)}
+      />
     </div>
   );
 };
