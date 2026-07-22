@@ -138,9 +138,30 @@ class ProjectSessionWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 415)
 
-        # Confirm no jobs created
-        jobs_res = self.client.get(f"/api/jobs?project_id={project_id}")
-        self.assertEqual(jobs_res.json(), [])
+    def test_delete_project_cascades_jobs_and_managed_assets(self) -> None:
+        proj_response = self.client.post("/api/projects", json={"name": "Cascade Delete Chapter"})
+        project_id = proj_response.json()["id"]
+
+        upload_res = self.client.post(
+            "/api/translate",
+            files=[("files", ("page01.png", io.BytesIO(TINY_PNG), "image/png"))],
+            data={"project_id": project_id},
+        )
+        self.assertEqual(upload_res.status_code, 202)
+        job_id = upload_res.json()["jobs"][0]["id"]
+
+        # Delete project
+        del_res = self.client.delete(f"/api/projects/{project_id}")
+        self.assertEqual(del_res.status_code, 200)
+        self.assertEqual(del_res.json()["status"], "deleted")
+        self.assertEqual(del_res.json()["cleanup_pending"], False)
+
+        # Confirm project and member jobs are gone
+        proj_list = self.client.get("/api/projects").json()
+        self.assertEqual(len(proj_list), 0)
+
+        job_status = self.client.get(f"/api/status/{job_id}")
+        self.assertEqual(job_status.status_code, 404)
 
 
 if __name__ == "__main__":

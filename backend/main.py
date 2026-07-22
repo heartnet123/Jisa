@@ -1552,20 +1552,76 @@ async def update_project(project_id: str, payload: ProjectCreatePayload):
     return projects_db[project_id]
 
 
+def _safe_unlink_asset(raw_path_or_url: str) -> bool:
+    if not raw_path_or_url:
+        return True
+    if raw_path_or_url.startswith("/uploads/"):
+        rel_name = raw_path_or_url.removeprefix("/uploads/").split("?", 1)[0]
+        target_path = (UPLOAD_DIR / rel_name).resolve()
+    else:
+        target_path = Path(raw_path_or_url).resolve()
+
+    upload_root = UPLOAD_DIR.resolve()
+    try:
+        target_path.relative_to(upload_root)
+    except ValueError:
+        try:
+            target_path.relative_to(Path(".").resolve())
+        except ValueError:
+            print(f"Refusing to delete path outside workspace: {target_path}")
+            return False
+
+    try:
+        if target_path.exists():
+            target_path.unlink()
+        return True
+    except Exception as exc:
+        print(f"Failed to unlink asset {target_path}: {exc}")
+        return False
+
+
+def _drain_pending_asset_deletions() -> bool:
+    pending_paths = repository.get_pending_asset_deletions()
+    all_success = True
+    for path in pending_paths:
+        if _safe_unlink_asset(path):
+            repository.remove_pending_asset_deletion(path)
+        else:
+            all_success = False
+    return all_success
+
+
 @app.delete("/api/projects/{project_id}")
 async def delete_project(project_id: str):
     if project_id not in projects_db:
         raise HTTPException(status_code=404, detail="Project not found")
-    
-    # Disassociate all jobs belonging to this project
-    for job_id in projects_db[project_id]["job_ids"]:
-        if job_id in jobs_db:
-            jobs_db[job_id]["project_id"] = None
-            
-    del projects_db[project_id]
-    repository.delete_project(project_id)
+
+    asset_paths = repository.delete_project_cascade(project_id)
+
+    job_ids_to_del = [jid for jid, j in jobs_db.items() if j.get("project_id") == project_id]
+    for jid in job_ids_to_del:
+        del jobs_db[jid]
+
+    if project_id in projects_db:
+        del projects_db[project_id]
+
+    failed_paths = []
+    for path in asset_paths:
+        if not _safe_unlink_asset(path):
+            failed_paths.append(path)
+
+    if failed_paths:
+        repository.enqueue_pending_asset_deletions(failed_paths)
+
+    drain_success = _drain_pending_asset_deletions()
+    cleanup_pending = bool(failed_paths) or not drain_success
+
     await notify_state_change()
-    return {"status": "deleted", "project_id": project_id}
+    return {
+        "status": "deleted",
+        "project_id": project_id,
+        "cleanup_pending": cleanup_pending,
+    }
 
 
 
@@ -1717,6 +1773,7 @@ async def notify_state_change(job_ids: list[str] | str | None = None, project_id
 @app.on_event("startup")
 async def startup_event():
     hydrate_repository_state()
+    _drain_pending_asset_deletions()
 
     async def periodic_health_broadcast():
         while True:
