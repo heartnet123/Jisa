@@ -85,6 +85,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
   const [newProjectName, setNewProjectName] = useState('');
   const [isSubmittingProject, setIsSubmittingProject] = useState(false);
   const [createProjectError, setCreateProjectError] = useState<string | null>(null);
+  const [isCreateProjectModalOpen, setIsCreateProjectModalOpen] = useState(false);
 
   // Local state for project renaming
   const [isEditingProjectName, setIsEditingProjectName] = useState(false);
@@ -130,6 +131,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
       const proj = await mangaApi.createProject(newProjectName.trim());
       setProjects(prev => [proj, ...prev]);
       setNewProjectName('');
+      setIsCreateProjectModalOpen(false);
       router.push(`/projects/${proj.id}`);
     } catch (err) {
       console.error('Failed to create project:', err);
@@ -221,61 +223,12 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
             </div>
           )}
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            {/* Left: Create Project Form */}
-            <div className="lg:col-span-1 bg-panel border border-border p-6 rounded-lg h-fit space-y-4">
+          <div className="space-y-4">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-border pb-3">
               <span className="font-mono text-xs text-muted uppercase tracking-widest font-black block">
-                Initialize Session
+                Project Sessions ({projects.length})
               </span>
-              <form onSubmit={handleCreateProject} className="space-y-4">
-                <div className="space-y-2">
-                  <label htmlFor="new-project-name" className="text-xs text-muted uppercase tracking-widest font-mono font-bold block">
-                    Session Title
-                  </label>
-                  <input
-                    id="new-project-name"
-                    type="text"
-                    placeholder="Chapter 1, Volume 1..."
-                    value={newProjectName}
-                    onChange={(e) => setNewProjectName(e.target.value)}
-                    className="w-full text-xs font-mono px-3 py-2.5 border border-border bg-surface rounded text-main focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all uppercase"
-                    disabled={isSubmittingProject}
-                    required
-                  />
-                </div>
-
-                {createProjectError && (
-                  <div role="alert" className="p-2 border border-red-500/20 bg-red-500/10 text-xs font-mono text-red-500 rounded">
-                    {createProjectError}
-                  </div>
-                )}
-
-                <button
-                  type="submit"
-                  disabled={!newProjectName.trim() || isSubmittingProject}
-                  className="w-full min-h-11 py-3 bg-accent hover:bg-accent-hover disabled:bg-panel disabled:text-muted text-white font-black uppercase tracking-widest font-mono text-xs rounded transition-colors cursor-pointer flex items-center justify-center gap-2"
-                >
-                  {isSubmittingProject ? (
-                    <>
-                      <Icon icon="eos-icons:loading" className="text-sm" />
-                      Creating...
-                    </>
-                  ) : (
-                    <>
-                      <Icon icon="solar:folder-with-files-linear" className="text-sm" />
-                      Create Session
-                    </>
-                  )}
-                </button>
-              </form>
-            </div>
-
-            {/* Right: Project Grid */}
-            <div className="lg:col-span-2 space-y-4">
-              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-border pb-2">
-                <span className="font-mono text-xs text-muted uppercase tracking-widest font-black block">
-                  Active Project Sessions ({projects.length})
-                </span>
+              <div className="flex items-center gap-3 w-full sm:w-auto">
                 <div className="relative w-full sm:w-60">
                   <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-muted">
                     <Icon icon="solar:magnifier-linear" />
@@ -288,76 +241,196 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
                     className="w-full text-xs font-mono pl-9 pr-3 py-1.5 border border-border bg-surface rounded text-main focus:outline-none focus:border-accent transition-colors"
                   />
                 </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCreateProjectError(null);
+                    setIsCreateProjectModalOpen(true);
+                  }}
+                  className="px-3.5 py-1.5 bg-accent hover:bg-accent-hover text-white font-mono text-xs font-bold uppercase tracking-wider rounded transition-colors cursor-pointer flex items-center gap-1.5 shrink-0"
+                >
+                  <Icon icon="solar:add-circle-linear" className="text-sm" />
+                  <span>Create Project</span>
+                </button>
               </div>
-
-              {projects.length === 0 ? (
-                <div className="flex flex-col items-center justify-center p-20 border border-dashed border-border bg-panel/40 rounded-lg text-center">
-                  <Icon icon="solar:folder-open-linear" className="text-5xl text-muted mb-4" />
-                  <span className="font-mono text-xs text-muted uppercase tracking-widest block font-black">
-                    No Active Sessions Found
-                  </span>
-                  <p className="text-xs text-subtle font-mono mt-2 uppercase max-w-xs leading-relaxed">
-                    Create a new session using the control center to start batching translations.
-                  </p>
-                </div>
-              ) : filteredProjects.length === 0 ? (
-                <div className="flex flex-col items-center justify-center p-20 border border-dashed border-border bg-panel/20 rounded-lg text-center">
-                  <Icon icon="solar:minimalistic-magnifier-linear" className="text-5xl text-muted mb-4" />
-                  <span className="font-mono text-xs text-muted uppercase tracking-widest block font-black">
-                    No Matching Sessions
-                  </span>
-                  <p className="text-xs text-subtle font-mono mt-2 uppercase max-w-xs leading-relaxed">
-                    Try adjusting your search filters to find existing project sessions.
-                  </p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {filteredProjects.map((proj) => {
-                    const projJobs = files.filter(f => f.project_id === proj.id);
-                    const pagesCompleted = projJobs.filter(f => f.status === 'completed').length;
-                    const progress = projJobs.length > 0 ? Math.round((pagesCompleted / projJobs.length) * 100) : 0;
-
-                    return (
-                      <button
-                        key={proj.id}
-                        onClick={() => router.push(`/projects/${proj.id}`)}
-                        className="p-5 bg-panel border border-border hover:border-accent text-left rounded-lg transition-all duration-300 font-mono text-xs group cursor-pointer relative overflow-hidden flex flex-col justify-between h-40 focus:outline-none focus:ring-1 focus:ring-accent"
-                      >
-                        <div className="space-y-1 w-full">
-                          <div className="flex justify-between items-start gap-2">
-                            <span className="font-bold text-main uppercase text-sm truncate group-hover:text-accent transition-colors pr-6">
-                              {proj.name}
-                            </span>
-                            <Icon icon="solar:arrow-right-linear" className="text-lg text-muted group-hover:text-accent transition-colors group-hover:translate-x-1" />
-                          </div>
-                          <span className="text-xs text-subtle block">ID: {proj.id}</span>
-                        </div>
-
-                        <div className="w-full space-y-3">
-                          <div className="flex justify-between items-center text-xs text-muted">
-                            <span>{projJobs.length} pages total</span>
-                            <span className="text-accent font-bold">{progress}% done</span>
-                          </div>
-
-                          {/* Simple Project progress bar */}
-                          <div className="h-1 bg-surface rounded-full overflow-hidden w-full">
-                            <div
-                              className="h-full bg-accent transition-all duration-500"
-                              style={{ width: `${progress}%` }}
-                            />
-                          </div>
-                        </div>
-
-                        <div className="text-xs text-subtle mt-1">
-                          Created: {new Date(proj.created_at).toLocaleDateString()}
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
             </div>
+
+            {projects.length === 0 ? (
+              <div className="flex flex-col items-center justify-center p-20 border border-dashed border-border bg-panel/40 rounded-lg text-center">
+                <Icon icon="solar:folder-open-linear" className="text-5xl text-muted mb-4" />
+                <span className="font-mono text-xs text-muted uppercase tracking-widest block font-black">
+                  No Project Sessions Found
+                </span>
+                <p className="text-xs text-subtle font-mono mt-2 uppercase max-w-xs leading-relaxed">
+                  Create a new project session to start batching translations.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCreateProjectError(null);
+                    setIsCreateProjectModalOpen(true);
+                  }}
+                  className="mt-4 px-4 py-2 bg-accent hover:bg-accent-hover text-white font-mono text-xs font-bold uppercase tracking-wider rounded transition-colors cursor-pointer flex items-center gap-1.5"
+                >
+                  <Icon icon="solar:add-circle-linear" className="text-sm" />
+                  <span>Create Project</span>
+                </button>
+              </div>
+            ) : filteredProjects.length === 0 ? (
+              <div className="flex flex-col items-center justify-center p-20 border border-dashed border-border bg-panel/20 rounded-lg text-center">
+                <Icon icon="solar:minimalistic-magnifier-linear" className="text-5xl text-muted mb-4" />
+                <span className="font-mono text-xs text-muted uppercase tracking-widest block font-black">
+                  No Matching Sessions
+                </span>
+                <p className="text-xs text-subtle font-mono mt-2 uppercase max-w-xs leading-relaxed">
+                  Try adjusting your search filters to find existing project sessions.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {filteredProjects.map((proj) => {
+                  const projJobs = files.filter(f => f.project_id === proj.id);
+                  const pagesCompleted = projJobs.filter(f => f.status === 'completed').length;
+                  const progress = projJobs.length > 0 ? Math.round((pagesCompleted / projJobs.length) * 100) : 0;
+
+                  return (
+                    <button
+                      key={proj.id}
+                      onClick={() => router.push(`/projects/${proj.id}`)}
+                      className="p-5 bg-panel border border-border hover:border-accent text-left rounded-lg transition-all duration-300 font-mono text-xs group cursor-pointer relative overflow-hidden flex flex-col justify-between h-40 focus:outline-none focus:ring-1 focus:ring-accent"
+                    >
+                      <div className="space-y-1 w-full">
+                        <div className="flex justify-between items-start gap-2">
+                          <span className="font-bold text-main uppercase text-sm truncate group-hover:text-accent transition-colors pr-6">
+                            {proj.name}
+                          </span>
+                          <Icon icon="solar:arrow-right-linear" className="text-lg text-muted group-hover:text-accent transition-colors group-hover:translate-x-1" />
+                        </div>
+                      </div>
+
+                      <div className="w-full space-y-3">
+                        <div className="flex justify-between items-center text-xs text-muted">
+                          <span>{projJobs.length} pages total</span>
+                          <span className="text-accent font-bold">{progress}% done</span>
+                        </div>
+
+                        {/* Simple Project progress bar */}
+                        <div className="h-1 bg-surface rounded-full overflow-hidden w-full">
+                          <div
+                            className="h-full bg-accent transition-all duration-500"
+                            style={{ width: `${progress}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="text-xs text-subtle mt-1">
+                        Created: {new Date(proj.created_at).toLocaleDateString()}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
+
+          {/* Create Project Modal */}
+          <AnimatePresence>
+            {isCreateProjectModalOpen && (
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="create-project-title"
+                className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
+                onClick={() => {
+                  setIsCreateProjectModalOpen(false);
+                  setCreateProjectError(null);
+                }}
+              >
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                  transition={{ duration: 0.2 }}
+                  className="w-full max-w-md bg-panel border border-border rounded-lg shadow-2xl p-6 space-y-5"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="flex justify-between items-center border-b border-border pb-3">
+                    <h3 id="create-project-title" className="font-mono text-sm font-black text-main uppercase tracking-wider flex items-center gap-2">
+                      <Icon icon="solar:folder-with-files-linear" className="text-base text-accent" />
+                      Create Project
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsCreateProjectModalOpen(false);
+                        setCreateProjectError(null);
+                      }}
+                      className="text-muted hover:text-main text-lg transition-colors cursor-pointer"
+                      aria-label="Close modal"
+                    >
+                      <Icon icon="solar:close-circle-linear" />
+                    </button>
+                  </div>
+
+                  <form onSubmit={handleCreateProject} className="space-y-4">
+                    <div className="space-y-2">
+                      <label htmlFor="modal-project-name" className="text-xs text-muted uppercase tracking-widest font-mono font-bold block">
+                        Project Title
+                      </label>
+                      <input
+                        id="modal-project-name"
+                        type="text"
+                        placeholder="Chapter 1, Volume 1..."
+                        value={newProjectName}
+                        onChange={(e) => setNewProjectName(e.target.value)}
+                        className="w-full text-xs font-mono px-3 py-2.5 border border-border bg-surface rounded text-main focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all uppercase"
+                        disabled={isSubmittingProject}
+                        autoFocus
+                        required
+                      />
+                    </div>
+
+                    {createProjectError && (
+                      <div role="alert" className="p-2.5 border border-red-500/30 bg-red-500/10 text-xs font-mono text-red-400 rounded flex items-center gap-2">
+                        <Icon icon="solar:danger-triangle-linear" className="text-sm shrink-0" />
+                        <span>{createProjectError}</span>
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-end gap-3 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsCreateProjectModalOpen(false);
+                          setCreateProjectError(null);
+                        }}
+                        className="px-4 py-2 border border-border hover:bg-surface text-muted hover:text-main font-mono text-xs font-bold uppercase tracking-wider rounded transition-colors cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={!newProjectName.trim() || isSubmittingProject}
+                        className="px-4 py-2 bg-accent hover:bg-accent-hover disabled:bg-panel disabled:text-muted text-white font-mono text-xs font-bold uppercase tracking-wider rounded transition-colors cursor-pointer flex items-center justify-center gap-2"
+                      >
+                        {isSubmittingProject ? (
+                          <>
+                            <Icon icon="eos-icons:loading" className="text-sm" />
+                            Creating...
+                          </>
+                        ) : (
+                          <>
+                            <Icon icon="solar:add-circle-linear" className="text-sm" />
+                            Create Project
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </form>
+                </motion.div>
+              </div>
+            )}
+          </AnimatePresence>
         </motion.div>
       </div>
     );

@@ -17,7 +17,22 @@ export function getBYOKConfig(): BYOKConfig | null {
 export function saveBYOKConfig(config: BYOKConfig): void {
   if (typeof window === "undefined") return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+    const existing = getBYOKConfig();
+    const apiKeys = { ...(existing?.apiKeys || {}) };
+
+    if (config.provider) {
+      if (config.apiKey) {
+        apiKeys[config.provider] = config.apiKey;
+      } else {
+        delete apiKeys[config.provider];
+      }
+    }
+
+    const configToSave: BYOKConfig = {
+      ...config,
+      apiKeys,
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(configToSave));
   } catch (e) {
     console.error("Failed to save BYOK config to localStorage", e);
   }

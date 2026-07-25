@@ -4,6 +4,7 @@ export interface BYOKConfig {
   model: string;
   apiBase?: string;
   customHeaders?: Record<string, string>;
+  apiKeys?: Record<string, string>;
 }
 
 export interface ProviderTemplate {

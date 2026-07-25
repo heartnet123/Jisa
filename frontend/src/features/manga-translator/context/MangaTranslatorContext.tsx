@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { mangaApi, API_BASE_URL } from '../api/mangaApi';
 import type { ProcessedManga, TranslationConfig, Project, SystemHealth } from '../types';
+import { getBYOKConfig } from '../api/byok';
 
 interface MangaTranslatorContextType {
   files: ProcessedManga[];
@@ -78,9 +79,23 @@ export const MangaTranslatorProvider: React.FC<{ children: React.ReactNode }> = 
 
   const [config, setConfig] = useState<TranslationConfig>({
     provider: 'openai',
-    model: 'gpt-5.4-mini',
-    systemPrompt: 'Translate this Japanese manga text to English while maintaining the original tone and context.',
+    model: 'gpt-4o-mini',
+    systemPrompt: 'คุณคือผู้แปลมังงะมืออาชีพ แปลภาษาญี่ปุ่นเป็นภาษาไทย โดยรักษาอารมณ์ บริบท และน้ำเสียงของตัวละคร',
   });
+
+  // ponytail: sync saved BYOK config on mount
+  useEffect(() => {
+    const saved = getBYOKConfig();
+    if (saved) {
+      setConfig((prev) => ({
+        ...prev,
+        provider: saved.provider || 'openai',
+        model: saved.model || 'gpt-4o-mini',
+        apiKey: saved.apiKey,
+        apiBase: saved.apiBase,
+      }));
+    }
+  }, []);
 
   // Sandbox states
   const [sandboxText, setSandboxText] = useState('「お前はもう死んでいる。」');
@@ -118,7 +133,7 @@ export const MangaTranslatorProvider: React.FC<{ children: React.ReactNode }> = 
       if (health.translation) {
         setConfig(prev => ({
           ...prev,
-          model: health.translation.model || prev.model,
+          model: prev.model || health.translation.model,
         }));
       }
     } catch (err) {
@@ -181,7 +196,7 @@ export const MangaTranslatorProvider: React.FC<{ children: React.ReactNode }> = 
         if (health.translation) {
           setConfig(prev => ({
             ...prev,
-            model: health.translation.model || prev.model,
+            model: prev.model || health.translation.model,
           }));
         }
       } catch (err) {
@@ -198,9 +213,16 @@ export const MangaTranslatorProvider: React.FC<{ children: React.ReactNode }> = 
       }
     });
 
-    eventSource.onerror = (err) => {
-      console.error('SSE Connection failed/reconnecting:', err);
-      setSseStatus('reconnecting');
+    eventSource.onerror = () => {
+      const isClosed = eventSource.readyState === EventSource.CLOSED;
+      const stateLabel = isClosed
+        ? 'CLOSED (2)'
+        : eventSource.readyState === EventSource.CONNECTING
+        ? 'CONNECTING (0)'
+        : `OPEN (${eventSource.readyState})`;
+
+      console.warn(`[SSE] Connection issue (readyState: ${stateLabel})`);
+      setSseStatus(isClosed ? 'error' : 'reconnecting');
       setHealthLoading(true);
     };
 

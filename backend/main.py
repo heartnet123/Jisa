@@ -1049,7 +1049,7 @@ async def translate_manga(
     return {
         "id": first_job_id,
         "status": "queued",
-        "jobs": created_jobs,
+        "jobs": [_sanitize_job_for_api(j) for j in created_jobs],
     }
 
 
@@ -1477,6 +1477,16 @@ async def sandbox_translate(payload: SandboxPayload):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _sanitize_job_for_api(job: dict) -> dict:
+    job_copy = job.copy()
+    job_copy["status"] = _status_for_api(job_copy.get("status", "queued"))
+    if "blocks_obj" in job_copy:
+        del job_copy["blocks_obj"]
+    if "byok_config" in job_copy:
+        del job_copy["byok_config"]
+    return job_copy
+
+
 @app.get("/api/jobs")
 async def list_jobs(project_id: str | None = None):
     """Returns a list of jobs, optionally filtered by project_id and ordered by sequence_id."""
@@ -1486,19 +1496,11 @@ async def list_jobs(project_id: str | None = None):
         for repo_job in db_jobs:
             job_id = repo_job["id"]
             job = jobs_db.get(job_id, repo_job)
-            job_copy = job.copy()
-            job_copy["status"] = _status_for_api(job_copy.get("status", "queued"))
-            if "blocks_obj" in job_copy:
-                del job_copy["blocks_obj"]
-            result.append(job_copy)
+            result.append(_sanitize_job_for_api(job))
         return result
     else:
         for job_id, job in jobs_db.items():
-            job_copy = job.copy()
-            job_copy["status"] = _status_for_api(job_copy.get("status", "queued"))
-            if "blocks_obj" in job_copy:
-                del job_copy["blocks_obj"]
-            result.append(job_copy)
+            result.append(_sanitize_job_for_api(job))
         return result[::-1]
 
 
@@ -1830,7 +1832,15 @@ async def stream_events():
         finally:
             event_manager.unsubscribe(queue)
             
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 if __name__ == "__main__":

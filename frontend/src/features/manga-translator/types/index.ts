@@ -66,10 +66,12 @@ export interface BatchUploadResponse {
 }
 
 export interface TranslationConfig {
-  provider: 'ollama' | 'openai' | 'anthropic';
+  // ponytail: support all LiteLLM providers (openai, anthropic, gemini, openrouter, deepseek, ollama, custom)
+  provider: string;
   model: string;
   systemPrompt: string;
   apiKey?: string;
+  apiBase?: string;
 }
 
 export interface Project {

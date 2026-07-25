@@ -20,36 +20,59 @@ const DEFAULT_PROVIDERS: ProviderTemplate[] = [
   {
     id: "openai",
     name: "OpenAI",
-    default_model: "gpt-4o-mini",
-    models: ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo", "o3-mini"],
+    default_model: "gpt-5.4-mini",
+    models: [
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-5.5",
+      "gpt-5.4",
+      "gpt-5.4-mini",
+    ],
     default_base: "https://api.openai.com/v1",
     requires_key: true,
   },
   {
     id: "anthropic",
     name: "Anthropic",
-    default_model: "claude-3-5-sonnet-20241022",
-    models: ["claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229"],
+    default_model: "claude-sonnet-5",
+    models: [
+      "claude-sonnet-5",
+      "claude-fable-5",
+      "claude-opus-4-8",
+      "claude-haiku-4-5",
+      "claude-3-7-sonnet-20250219",
+    ],
     default_base: "https://api.anthropic.com",
     requires_key: true,
   },
   {
     id: "gemini",
     name: "Google Gemini",
-    default_model: "gemini-1.5-flash",
-    models: ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"],
+    default_model: "gemini-3.6-flash",
+    models: [
+      "gemini-3.6-flash",
+      "gemini-3.5-flash-lite",
+      "gemini-3.5-flash",
+      "gemini-3.1-pro",
+      "gemini-3-flash",
+      "gemini-3.1-flash-lite",
+    ],
     default_base: "https://generativelanguage.googleapis.com",
     requires_key: true,
   },
   {
     id: "openrouter",
     name: "OpenRouter",
-    default_model: "anthropic/claude-3.5-sonnet",
+    default_model: "anthropic/claude-sonnet-5",
     models: [
-      "anthropic/claude-3.5-sonnet",
-      "google/gemini-flash-1.5",
-      "deepseek/deepseek-r1",
+      "anthropic/claude-sonnet-5",
+      "anthropic/claude-fable-5",
+      "google/gemini-3.6-flash",
+      "deepseek/deepseek-v4-pro",
+      "deepseek/deepseek-v4-flash",
       "meta-llama/llama-3.3-70b-instruct",
+      "qwen/qwen-2.5-72b-instruct",
     ],
     default_base: "https://openrouter.ai/api/v1",
     requires_key: true,
@@ -57,16 +80,16 @@ const DEFAULT_PROVIDERS: ProviderTemplate[] = [
   {
     id: "deepseek",
     name: "DeepSeek",
-    default_model: "deepseek-chat",
-    models: ["deepseek-chat", "deepseek-reasoner"],
+    default_model: "deepseek-v4-flash",
+    models: ["deepseek-v4-flash", "deepseek-v4-pro"],
     default_base: "https://api.deepseek.com/v1",
     requires_key: true,
   },
   {
     id: "ollama",
     name: "Ollama (Local)",
-    default_model: "llama3.2",
-    models: ["llama3.2", "mistral", "qwen2.5-coder"],
+    default_model: "llama3.3",
+    models: ["llama3.3", "llama3.2", "qwen2.5-coder", "deepseek-r1:8b", "mistral", "gemma2"],
     default_base: "http://localhost:11434",
     requires_key: false,
   },
@@ -74,7 +97,7 @@ const DEFAULT_PROVIDERS: ProviderTemplate[] = [
     id: "custom",
     name: "Custom OpenAI-Compatible",
     default_model: "default",
-    models: [],
+    models: ["default"],
     default_base: "http://localhost:8000/v1",
     requires_key: false,
   },
@@ -105,8 +128,10 @@ export const BYOKSettingsModal: React.FC<BYOKSettingsModalProps> = ({
       // Load saved BYOK config
       const saved = getBYOKConfig();
       if (saved) {
-        setProvider(saved.provider || "openai");
-        setApiKey(saved.apiKey || "");
+        const activeProv = saved.provider || "openai";
+        setProvider(activeProv);
+        const provKey = saved.apiKeys?.[activeProv] ?? (saved.provider === activeProv ? saved.apiKey : "") ?? "";
+        setApiKey(provKey);
         setModel(saved.model || "gpt-4o-mini");
         setApiBase(saved.apiBase || "https://api.openai.com/v1");
       }
@@ -115,11 +140,20 @@ export const BYOKSettingsModal: React.FC<BYOKSettingsModalProps> = ({
   }, [isOpen]);
 
   const activeProvider = providers.find((p) => p.id === provider) || DEFAULT_PROVIDERS[0];
+  const availableModels =
+    model && !activeProvider.models.includes(model)
+      ? [model, ...activeProvider.models]
+      : activeProvider.models;
 
   const handleProviderChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const selectedId = e.target.value;
     setProvider(selectedId);
     const found = providers.find((p) => p.id === selectedId);
+
+    const saved = getBYOKConfig();
+    const providerKey = saved?.apiKeys?.[selectedId] ?? (saved?.provider === selectedId ? saved.apiKey : "") ?? "";
+    setApiKey(providerKey);
+
     if (found) {
       setModel(found.default_model);
       setApiBase(found.default_base);
@@ -209,7 +243,7 @@ export const BYOKSettingsModal: React.FC<BYOKSettingsModalProps> = ({
             <div className="space-y-4 text-sm">
               {/* Provider Selection */}
               <div>
-                <label className="block text-xs font-medium text-zinc-300 mb-1.5">AI Provider</label>
+                <label className="block text-xs font-medium text-zinc-300 mb-1.5">Provider</label>
                 <select
                   value={provider}
                   onChange={handleProviderChange}
@@ -249,37 +283,20 @@ export const BYOKSettingsModal: React.FC<BYOKSettingsModalProps> = ({
                 </div>
               </div>
 
-              {/* Model Input & Selector */}
+              {/* Model Dropdown */}
               <div>
-                <label className="block text-xs font-medium text-zinc-300 mb-1.5">Model Name / ID</label>
-                <div className="space-y-2">
-                  <input
-                    type="text"
-                    value={model}
-                    onChange={(e) => setModel(e.target.value)}
-                    placeholder="e.g. gpt-4o-mini, claude-3-5-sonnet, llama3.2"
-                    className="w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3.5 py-2.5 text-zinc-100 placeholder:text-zinc-600 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 transition-all"
-                  />
-                  {activeProvider.models.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 pt-1">
-                      <span className="text-[11px] text-zinc-500 py-0.5">Presets:</span>
-                      {activeProvider.models.map((m) => (
-                        <button
-                          key={m}
-                          type="button"
-                          onClick={() => setModel(m)}
-                          className={`text-xs px-2.5 py-0.5 rounded-full border transition-all ${
-                            model === m
-                              ? "bg-violet-600/30 text-violet-300 border-violet-500/50"
-                              : "bg-zinc-800/60 text-zinc-400 border-zinc-700/50 hover:bg-zinc-800 hover:text-zinc-200"
-                          }`}
-                        >
-                          {m}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                <label className="block text-xs font-medium text-zinc-300 mb-1.5">Model</label>
+                <select
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  className="w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3.5 py-2.5 text-zinc-100 focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500 transition-all cursor-pointer text-sm"
+                >
+                  {availableModels.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               {/* Base URL (Optional / Advanced) */}
@@ -346,10 +363,7 @@ export const BYOKSettingsModal: React.FC<BYOKSettingsModalProps> = ({
                       <span>Testing...</span>
                     </>
                   ) : (
-                    <>
-                      <Icon icon="solar:bolt-bold" className="text-sm text-amber-400" />
-                      <span>Test Connection</span>
-                    </>
+                    <span>Test Connection</span>
                   )}
                 </button>
 
