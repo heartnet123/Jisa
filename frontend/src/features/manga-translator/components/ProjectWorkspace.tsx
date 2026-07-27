@@ -102,6 +102,10 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
     setByokConfig(getBYOKConfig());
   }, []);
 
+  // Local state for catalogue status filter
+  type CatalogueStatusFilter = 'all' | 'awaiting_review' | 'failed' | 'completed' | 'processing';
+  const [catalogueStatusFilter, setCatalogueStatusFilter] = useState<CatalogueStatusFilter>('all');
+
   // Find active project
   const activeProj = projectId ? projects.find(p => p.id === projectId) : null;
 
@@ -478,6 +482,18 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
   const indexedJobs = activeProjJobs.map((file, index) => ({ file, index }));
   const inPipeline = indexedJobs.filter(item => ['queued', 'segmenting', 'ocr', 'translating', 'inpainting', 'typesetting', 'uploading'].includes(item.file.status));
 
+  // Filtered catalogue jobs based on active status filter
+  const filteredCatalogueJobs = indexedJobs.filter(({ file }) => {
+    if (catalogueStatusFilter === 'all') return true;
+    if (catalogueStatusFilter === 'awaiting_review') return file.status === 'awaiting_review';
+    if (catalogueStatusFilter === 'failed') return ['failed', 'error'].includes(file.status);
+    if (catalogueStatusFilter === 'completed') return file.status === 'completed';
+    if (catalogueStatusFilter === 'processing') {
+      return ['queued', 'segmenting', 'ocr', 'translating', 'inpainting', 'typesetting', 'uploading'].includes(file.status);
+    }
+    return true;
+  });
+
   const handleDelete = async () => {
     if (confirm(`Confirm deletion of project "${activeProj.name}"? All member pages and images will be permanently deleted from disk.`)) {
       await handleDeleteProject(projectId);
@@ -589,22 +605,34 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
 
           <div className="flex items-center gap-4">
             <div className="flex gap-2 font-mono text-xs">
-              <div className="bg-surface border border-border px-3 py-2 rounded">
+              <button 
+                onClick={() => setCatalogueStatusFilter('completed')}
+                className="bg-surface border border-border hover:border-accent/40 px-3 py-2 rounded text-left cursor-pointer transition-colors"
+                title="Filter catalogue by Processed sheets"
+              >
                 <span className="text-muted uppercase block text-xs font-bold">Processed</span>
                 <span className="text-green-600 dark:text-green-400 font-bold text-sm">{completedCount}</span>
                 <span className="text-subtle text-xs"> / {activeProjJobs.length} pages</span>
-              </div>
-              <div className="bg-surface border border-border px-3 py-2 rounded">
+              </button>
+              <button 
+                onClick={() => setCatalogueStatusFilter('processing')}
+                className="bg-surface border border-border hover:border-accent/40 px-3 py-2 rounded text-left cursor-pointer transition-colors"
+                title="Filter catalogue by In Progress sheets"
+              >
                 <span className="text-muted uppercase block text-xs font-bold">In Progress</span>
                 <span className="text-accent font-bold text-sm">{processingCount}</span>
                 <span className="text-subtle text-xs"> active</span>
-              </div>
+              </button>
               {(failedCount > 0 || awaitingReviewCount > 0) && (
-                <div className="bg-surface border border-border px-3 py-2 rounded">
+                <button 
+                  onClick={() => setCatalogueStatusFilter(awaitingReviewCount > 0 ? 'awaiting_review' : 'failed')}
+                  className="bg-surface border border-border hover:border-yellow-500/50 px-3 py-2 rounded text-left cursor-pointer transition-colors"
+                  title="Filter catalogue by Attention items"
+                >
                   <span className="text-muted uppercase block text-xs font-bold">Attention</span>
                   <span className="text-yellow-600 dark:text-yellow-400 font-bold text-sm">{failedCount + awaitingReviewCount}</span>
                   <span className="text-subtle text-xs"> items</span>
-                </div>
+                </button>
               )}
             </div>
 
@@ -800,13 +828,38 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
 
         {/* Project catalogue layout */}
         <div className="space-y-6">
-          <div className="border-b border-[#1c1c1c] pb-3 flex justify-between items-center">
+          <div className="border-b border-[#1c1c1c] pb-3 flex flex-wrap justify-between items-center gap-3">
             <span className="font-mono text-xs text-[#666] uppercase tracking-widest font-black block">
               Chapter Catalogue ({activeProjJobs.length} Sheets)
             </span>
-            <span className="text-[9px] text-[#444] font-mono uppercase tracking-widest">
-              Stable Sequence Order
-            </span>
+
+            {/* Status Filter Tabs */}
+            <div className="flex items-center gap-1.5 font-mono text-xs overflow-x-auto py-1">
+              {[
+                { id: 'all', label: 'All', count: activeProjJobs.length, color: 'text-main' },
+                { id: 'awaiting_review', label: 'Awaiting Review', count: awaitingReviewCount, color: 'text-yellow-500' },
+                { id: 'failed', label: 'Failed', count: failedCount, color: 'text-red-500' },
+                { id: 'completed', label: 'Completed', count: completedCount, color: 'text-green-500' },
+                { id: 'processing', label: 'Processing', count: processingCount, color: 'text-accent' },
+              ].map(tab => (
+                <button
+                  key={tab.id}
+                  onClick={() => setCatalogueStatusFilter(tab.id as CatalogueStatusFilter)}
+                  className={cn(
+                    "px-2.5 py-1 rounded text-xs uppercase tracking-wider font-bold transition-all flex items-center gap-1.5 border cursor-pointer",
+                    catalogueStatusFilter === tab.id
+                      ? "bg-accent/15 border-accent text-accent shadow-sm"
+                      : "bg-surface border-border hover:bg-panel text-muted hover:text-main"
+                  )}
+                  title={`Filter catalogue by ${tab.label}`}
+                >
+                  <span>{tab.label}</span>
+                  <span className={cn("px-1.5 py-0.5 text-[10px] rounded bg-surface border border-border font-extrabold", tab.color)}>
+                    {tab.count}
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
 
           {activeProjJobs.length === 0 ? (
@@ -816,10 +869,20 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
                 Add manga page sheets using the ingestion console above to begin pipeline synthesis.
               </span>
             </div>
+          ) : filteredCatalogueJobs.length === 0 ? (
+            <div className="p-12 border border-dashed border-[#1c1c1c] text-center text-xs text-[#555] font-mono uppercase bg-[#080808]/50 rounded-lg space-y-3">
+              <p className="font-bold text-muted">No sheets match status filter "{catalogueStatusFilter.replace('_', ' ')}"</p>
+              <button
+                onClick={() => setCatalogueStatusFilter('all')}
+                className="px-3 py-1.5 bg-surface border border-border hover:border-accent hover:text-accent rounded text-xs uppercase tracking-wider font-bold transition-all cursor-pointer"
+              >
+                Clear Filter (Show All {activeProjJobs.length} Sheets)
+              </button>
+            </div>
           ) : (
             <div className="space-y-4">
               <div className="grid grid-cols-1 gap-4 pl-4 border-l border-cyan-950/30">
-                {indexedJobs.map(({ file, index }) => (
+                {filteredCatalogueJobs.map(({ file, index }) => (
                   <div key={file.id} className="flex items-start gap-4">
                     <div className="flex flex-col items-center justify-center bg-[#0d0d0d] border border-[#1a1a1a] rounded p-2 min-w-[70px] h-28 shrink-0 font-mono">
                       <span className="text-[8px] text-[#555] uppercase tracking-wider font-bold">PAGE</span>
