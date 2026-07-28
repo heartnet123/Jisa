@@ -259,10 +259,53 @@ export const MangaTranslatorProvider: React.FC<{ children: React.ReactNode }> = 
       const returnedJobs = response.jobs || [];
 
       setFiles(prev => {
-        let updated = prev.filter(f => !pendingItems.some(p => p.pendingJobId === f.id));
+        const pendingIds = new Set(pendingItems.map((p) => p.pendingJobId));
+        const replacementByPendingId = new Map<string, ProcessedManga>();
+        const replacementIds = new Set<string>();
+        const insertedReplacementIds = new Set<string>();
+        const extraJobs: ProcessedManga[] = [];
+        const usedIndexes = new Set<number>();
+        const usedReturnedIds = new Set<string>();
+
+        const findPendingIndex = (job: ProcessedManga) => {
+          const byFilename = pendingItems.findIndex((pending, index) => {
+            return !usedIndexes.has(index) && pending.tempManga.filename === job.filename;
+          });
+          if (byFilename !== -1) {
+            return byFilename;
+          }
+
+          if (job.sequence_id !== undefined) {
+            const bySequence = pendingItems.findIndex((pending, index) => {
+              return !usedIndexes.has(index) && pending.tempManga.sequence_id === job.sequence_id;
+            });
+            if (bySequence !== -1) {
+              return bySequence;
+            }
+          }
+
+          return pendingItems.findIndex((_, index) => !usedIndexes.has(index));
+        };
+
         returnedJobs.forEach((job, idx) => {
-          const match = pendingItems[idx];
-          const localUrl = match ? match.localUrl : undefined;
+          if (usedReturnedIds.has(job.id)) {
+            return;
+          }
+          usedReturnedIds.add(job.id);
+
+          const matchIndex = findPendingIndex(job);
+          const pendingMatch = matchIndex === -1 ? undefined : pendingItems[matchIndex];
+          const localUrl = pendingMatch ? pendingMatch.localUrl : undefined;
+
+          // Revoke local object URL if server URL is returned
+          if (pendingMatch?.localUrl && (job.originalUrl || job.original_url)) {
+            try {
+              URL.revokeObjectURL(pendingMatch.localUrl);
+            } catch (e) {
+              // ignore
+            }
+          }
+
           const newManga: ProcessedManga = {
             ...job,
             originalUrl: job.originalUrl || job.original_url || localUrl || '',
@@ -271,13 +314,50 @@ export const MangaTranslatorProvider: React.FC<{ children: React.ReactNode }> = 
             progress: job.progress ?? 5,
             message: job.message || 'Queued for processing.',
             project_id: projectId,
-            sequence_id: job.sequence_id ?? idx,
+            sequence_id: job.sequence_id ?? (matchIndex === -1 ? idx : matchIndex),
           };
-          if (!updated.some(f => f.id === newManga.id)) {
-            updated.push(newManga);
+
+          if (matchIndex === -1) {
+            extraJobs.push(newManga);
+            return;
           }
+
+          usedIndexes.add(matchIndex);
+          replacementByPendingId.set(pendingItems[matchIndex].pendingJobId, newManga);
+          replacementIds.add(newManga.id);
         });
-        return updated;
+
+        const rebuilt = prev.flatMap((item) => {
+          const replacement = replacementByPendingId.get(item.id);
+          if (replacement) {
+            insertedReplacementIds.add(replacement.id);
+            return [replacement];
+          }
+          if (pendingIds.has(item.id) || replacementIds.has(item.id)) {
+            return [];
+          }
+          return [item];
+        });
+
+        const existingIds = new Set(rebuilt.map((item) => item.id));
+        const missingReplacements = pendingItems
+          .map((pending) => replacementByPendingId.get(pending.pendingJobId))
+          .filter((job): job is ProcessedManga => Boolean(job))
+          .filter((job) => !insertedReplacementIds.has(job.id) && !existingIds.has(job.id));
+
+        missingReplacements.forEach((job) => {
+          existingIds.add(job.id);
+        });
+
+        const dedupedExtras = extraJobs.filter((job) => {
+          if (existingIds.has(job.id)) {
+            return false;
+          }
+          existingIds.add(job.id);
+          return true;
+        });
+
+        return [...rebuilt, ...missingReplacements, ...dedupedExtras];
       });
     } catch (err) {
       console.error('Batch upload failed:', err);

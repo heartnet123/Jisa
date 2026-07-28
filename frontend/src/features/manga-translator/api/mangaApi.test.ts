@@ -30,7 +30,10 @@ describe("mangaApi.uploadBatch", () => {
     const [url, formData, config] = mockPost.mock.calls[0];
     expect(url).toContain("/api/translate");
     expect(formData).toBeInstanceOf(FormData);
-    expect(config?.headers?.["Content-Type"]).toBe("multipart/form-data");
+    const fd = formData as FormData;
+    expect(fd.getAll("files")).toHaveLength(2);
+    expect(fd.get("project_id")).toBe("proj-123");
+    expect(config?.timeout).toBe(120000);
 
     expect(result.jobs).toHaveLength(2);
     expect(result.jobs?.[0].sequence_id).toBe(0);

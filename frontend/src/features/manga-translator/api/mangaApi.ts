@@ -46,10 +46,8 @@ export const mangaApi = {
       `${API_BASE_URL}/api/translate`,
       formData,
       {
-        headers: {
-          "Content-Type": "multipart/form-data",
-          ...byokHeaders,
-        },
+        timeout: 120000,
+        headers: byokHeaders,
       },
     );
 
@@ -73,10 +71,8 @@ export const mangaApi = {
       `${API_BASE_URL}/api/translate`,
       formData,
       {
-        headers: {
-          "Content-Type": "multipart/form-data",
-          ...byokHeaders,
-        },
+        timeout: 120000,
+        headers: byokHeaders,
       },
     );
 
