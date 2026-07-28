@@ -13,93 +13,7 @@ import {
   testBYOKConnection,
 } from '@/features/manga-translator/api/byok';
 
-// ponytail: static fallback provider options if API is loading or unreachable
-const DEFAULT_PROVIDERS: ProviderTemplate[] = [
-  {
-    id: 'openai',
-    name: 'OpenAI',
-    default_model: 'gpt-5.4-mini',
-    models: [
-      'gpt-5.6-sol',
-      'gpt-5.6-terra',
-      'gpt-5.6-luna',
-      'gpt-5.5',
-      'gpt-5.4',
-      'gpt-5.4-mini',
-    ],
-    default_base: 'https://api.openai.com/v1',
-    requires_key: true,
-  },
-  {
-    id: 'anthropic',
-    name: 'Anthropic',
-    default_model: 'claude-sonnet-5',
-    models: [
-      'claude-sonnet-5',
-      'claude-fable-5',
-      'claude-opus-4-8',
-      'claude-haiku-4-5',
-      'claude-3-7-sonnet-20250219',
-    ],
-    default_base: 'https://api.anthropic.com',
-    requires_key: true,
-  },
-  {
-    id: 'gemini',
-    name: 'Google Gemini',
-    default_model: 'gemini-3.6-flash',
-    models: [
-      'gemini-3.6-flash',
-      'gemini-3.5-flash-lite',
-      'gemini-3.5-flash',
-      'gemini-3.1-pro',
-      'gemini-3-flash',
-      'gemini-3.1-flash-lite',
-    ],
-    default_base: 'https://generativelanguage.googleapis.com',
-    requires_key: true,
-  },
-  {
-    id: 'openrouter',
-    name: 'OpenRouter',
-    default_model: 'anthropic/claude-sonnet-5',
-    models: [
-      'anthropic/claude-sonnet-5',
-      'anthropic/claude-fable-5',
-      'google/gemini-3.6-flash',
-      'deepseek/deepseek-v4-pro',
-      'deepseek/deepseek-v4-flash',
-      'meta-llama/llama-3.3-70b-instruct',
-      'qwen/qwen-2.5-72b-instruct',
-    ],
-    default_base: 'https://openrouter.ai/api/v1',
-    requires_key: true,
-  },
-  {
-    id: 'deepseek',
-    name: 'DeepSeek',
-    default_model: 'deepseek-v4-flash',
-    models: ['deepseek-v4-flash', 'deepseek-v4-pro'],
-    default_base: 'https://api.deepseek.com/v1',
-    requires_key: true,
-  },
-  {
-    id: 'ollama',
-    name: 'Ollama (Local)',
-    default_model: 'llama3.3',
-    models: ['llama3.3', 'llama3.2', 'qwen2.5-coder', 'deepseek-r1:8b', 'mistral', 'gemma2'],
-    default_base: 'http://localhost:11434',
-    requires_key: false,
-  },
-  {
-    id: 'custom',
-    name: 'Custom OpenAI-Compatible',
-    default_model: 'default',
-    models: ['default'],
-    default_base: 'http://localhost:8000/v1',
-    requires_key: false,
-  },
-];
+import { DEFAULT_PROVIDERS } from '@/features/manga-translator/types/byok';
 
 export default function ConfigPage() {
   const {
@@ -119,6 +33,9 @@ export default function ConfigPage() {
 
   const [providers, setProviders] = useState<ProviderTemplate[]>(DEFAULT_PROVIDERS);
   const [apiKey, setApiKey] = useState<string>('');
+  const [apiBaseInput, setApiBaseInput] = useState<string>('');
+  const [isCustomModelMode, setIsCustomModelMode] = useState<boolean>(false);
+  const [customModelInput, setCustomModelInput] = useState<string>('');
   const [showKey, setShowKey] = useState<boolean>(false);
   const [testing, setTesting] = useState<boolean>(false);
   const [testResult, setTestResult] = useState<BYOKTestResult | null>(null);
@@ -135,12 +52,15 @@ export default function ConfigPage() {
       const keyForProv =
         saved.apiKeys?.[activeProv] ?? (saved.provider === activeProv ? saved.apiKey : '') ?? '';
       setApiKey(keyForProv);
+      if (saved.apiBase) setApiBaseInput(saved.apiBase);
+      if (saved.model) {
+        setCustomModelInput(saved.model);
+      }
     }
   }, []);
 
   const activeProvider = providers.find((p) => p.id === config.provider) || DEFAULT_PROVIDERS[0];
 
-  // Resolve available models (ensure config.model is always included in option list)
   const rawModels =
     config.provider === 'ollama' && systemHealth?.ollama?.models?.length
       ? systemHealth.ollama.models
@@ -151,6 +71,8 @@ export default function ConfigPage() {
       ? [config.model, ...rawModels]
       : rawModels;
 
+  const effectiveApiBase = apiBaseInput.trim() || activeProvider.default_base;
+
   const handleProviderChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const selectedId = e.target.value;
     const found = providers.find((p) => p.id === selectedId) || DEFAULT_PROVIDERS[0];
@@ -160,6 +82,9 @@ export default function ConfigPage() {
     const providerKey =
       saved?.apiKeys?.[selectedId] ?? (saved?.provider === selectedId ? saved.apiKey : '') ?? '';
     setApiKey(providerKey);
+    setApiBaseInput(found.default_base);
+    setIsCustomModelMode(false);
+    setCustomModelInput('');
 
     setConfig((prev) => ({
       ...prev,
@@ -187,7 +112,7 @@ export default function ConfigPage() {
       provider: config.provider,
       apiKey: apiKey.trim() || undefined,
       model: config.model,
-      apiBase: activeProvider.default_base,
+      apiBase: effectiveApiBase,
     };
 
     const result = await testBYOKConnection(byokConfig);
@@ -200,7 +125,7 @@ export default function ConfigPage() {
       provider: config.provider,
       apiKey: apiKey.trim() || undefined,
       model: config.model,
-      apiBase: activeProvider.default_base,
+      apiBase: effectiveApiBase,
     };
 
     saveBYOKConfig(byokConfig);
@@ -304,14 +229,21 @@ export default function ConfigPage() {
                 </div>
               </div>
 
-              {/* Model Dropdown */}
+              {/* Model Dropdown & Custom Model Input */}
               <div className="space-y-2">
                 <label className="text-[10px] text-[#555] uppercase tracking-widest block font-bold">
                   Model
                 </label>
                 <select
-                  value={config.model}
-                  onChange={(e) => setConfig((prev) => ({ ...prev, model: e.target.value }))}
+                  value={isCustomModelMode ? '__custom__' : config.model}
+                  onChange={(e) => {
+                    if (e.target.value === '__custom__') {
+                      setIsCustomModelMode(true);
+                    } else {
+                      setIsCustomModelMode(false);
+                      setConfig((prev) => ({ ...prev, model: e.target.value }));
+                    }
+                  }}
                   className="w-full bg-[#121212] border border-[#222] p-2.5 rounded text-white focus:outline-none focus:border-cyan-500 text-xs cursor-pointer"
                 >
                   {availableModels.map((m) => (
@@ -319,7 +251,34 @@ export default function ConfigPage() {
                       {m}
                     </option>
                   ))}
+                  <option value="__custom__">Custom Model ID...</option>
                 </select>
+                {isCustomModelMode && (
+                  <input
+                    type="text"
+                    value={customModelInput}
+                    onChange={(e) => {
+                      setCustomModelInput(e.target.value);
+                      setConfig((prev) => ({ ...prev, model: e.target.value }));
+                    }}
+                    placeholder="Enter custom model ID (e.g. ft:gpt-4o:...)"
+                    className="w-full bg-[#121212] border border-[#222] p-2.5 rounded text-white focus:outline-none focus:border-cyan-500 text-xs font-mono mt-1"
+                  />
+                )}
+              </div>
+
+              {/* API Base URL */}
+              <div className="space-y-2">
+                <label className="text-[10px] text-[#555] uppercase tracking-widest block font-bold">
+                  API Base URL
+                </label>
+                <input
+                  type="text"
+                  value={apiBaseInput}
+                  onChange={(e) => setApiBaseInput(e.target.value)}
+                  placeholder={activeProvider.default_base}
+                  className="w-full bg-[#121212] border border-[#222] p-2.5 rounded text-white focus:outline-none focus:border-cyan-500 text-xs font-mono"
+                />
               </div>
 
               {/* Test & Save Actions */}
