@@ -345,6 +345,12 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
                 aria-modal="true"
                 aria-labelledby="create-project-title"
                 className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    setIsCreateProjectModalOpen(false);
+                    setCreateProjectError(null);
+                  }
+                }}
                 onClick={() => {
                   setIsCreateProjectModalOpen(false);
                   setCreateProjectError(null);
@@ -454,33 +460,30 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
     );
   }
 
+  // Constant for processing statuses
+  const PROCESSING_STATUSES = ['queued', 'segmenting', 'ocr', 'translating', 'inpainting', 'typesetting', 'uploading'];
+
   // Filter project specific files
   let activeProjJobs = files.filter(f => f.project_id === projectId);
   
-  // Sort pages strictly by sequence_id (fallback to page_order)
-  activeProjJobs = [...activeProjJobs].sort((a, b) => {
-    if (a.sequence_id !== undefined && b.sequence_id !== undefined) {
-      return a.sequence_id - b.sequence_id;
-    }
-    if (activeProj.page_order && activeProj.page_order.length > 0) {
-      const idxA = activeProj.page_order.indexOf(a.id);
-      const idxB = activeProj.page_order.indexOf(b.id);
-      if (idxA !== -1 && idxB !== -1) return idxA - idxB;
-      if (idxA !== -1) return -1;
-      if (idxB !== -1) return 1;
-    }
-    return 0;
-  });
+  // Sort pages using single precomputed rank per job
+  const pageOrderMap = new Map((activeProj.page_order || []).map((id, idx) => [id, idx]));
+  const getJobRank = (job: ProcessedManga) => {
+    if (job.sequence_id !== undefined) return job.sequence_id;
+    if (pageOrderMap.has(job.id)) return pageOrderMap.get(job.id)!;
+    return Number.MAX_SAFE_INTEGER;
+  };
+  activeProjJobs = [...activeProjJobs].sort((a, b) => getJobRank(a) - getJobRank(b));
 
   // Stats calculation
   const completedCount = activeProjJobs.filter(f => f.status === 'completed').length;
-  const processingCount = activeProjJobs.filter(f => ['queued', 'segmenting', 'ocr', 'translating', 'inpainting', 'typesetting', 'uploading'].includes(f.status)).length;
+  const processingCount = activeProjJobs.filter(f => PROCESSING_STATUSES.includes(f.status)).length;
   const failedCount = activeProjJobs.filter(f => ['failed', 'error'].includes(f.status)).length;
   const awaitingReviewCount = activeProjJobs.filter(f => f.status === 'awaiting_review').length;
   
   // Grouped pages with actual indices
   const indexedJobs = activeProjJobs.map((file, index) => ({ file, index }));
-  const inPipeline = indexedJobs.filter(item => ['queued', 'segmenting', 'ocr', 'translating', 'inpainting', 'typesetting', 'uploading'].includes(item.file.status));
+  const inPipeline = indexedJobs.filter(item => PROCESSING_STATUSES.includes(item.file.status));
 
   // Filtered catalogue jobs based on active status filter
   const filteredCatalogueJobs = indexedJobs.filter(({ file }) => {
@@ -488,9 +491,8 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
     if (catalogueStatusFilter === 'awaiting_review') return file.status === 'awaiting_review';
     if (catalogueStatusFilter === 'failed') return ['failed', 'error'].includes(file.status);
     if (catalogueStatusFilter === 'completed') return file.status === 'completed';
-    if (catalogueStatusFilter === 'processing') {
-      return ['queued', 'segmenting', 'ocr', 'translating', 'inpainting', 'typesetting', 'uploading'].includes(file.status);
-    }
+    if (catalogueStatusFilter === 'processing') return PROCESSING_STATUSES.includes(file.status);
+    if (catalogueStatusFilter === 'attention') return file.status === 'awaiting_review' || ['failed', 'error'].includes(file.status);
     return true;
   });
 
@@ -606,8 +608,9 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
           <div className="flex items-center gap-4">
             <div className="flex gap-2 font-mono text-xs">
               <button 
-                onClick={() => setCatalogueStatusFilter('completed')}
-                className="bg-surface border border-border hover:border-accent/40 px-3 py-2 rounded text-left cursor-pointer transition-colors"
+                onClick={() => setCatalogueStatusFilter(catalogueStatusFilter === 'completed' ? 'all' : 'completed')}
+                aria-pressed={catalogueStatusFilter === 'completed'}
+                className={`bg-surface border ${catalogueStatusFilter === 'completed' ? 'border-accent text-accent font-bold' : 'border-border hover:border-accent/40'} px-3 py-2 rounded text-left cursor-pointer transition-colors`}
                 title="Filter catalogue by Processed sheets"
               >
                 <span className="text-muted uppercase block text-xs font-bold">Processed</span>
@@ -615,8 +618,9 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
                 <span className="text-subtle text-xs"> / {activeProjJobs.length} pages</span>
               </button>
               <button 
-                onClick={() => setCatalogueStatusFilter('processing')}
-                className="bg-surface border border-border hover:border-accent/40 px-3 py-2 rounded text-left cursor-pointer transition-colors"
+                onClick={() => setCatalogueStatusFilter(catalogueStatusFilter === 'processing' ? 'all' : 'processing')}
+                aria-pressed={catalogueStatusFilter === 'processing'}
+                className={`bg-surface border ${catalogueStatusFilter === 'processing' ? 'border-accent text-accent font-bold' : 'border-border hover:border-accent/40'} px-3 py-2 rounded text-left cursor-pointer transition-colors`}
                 title="Filter catalogue by In Progress sheets"
               >
                 <span className="text-muted uppercase block text-xs font-bold">In Progress</span>
@@ -625,8 +629,9 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
               </button>
               {(failedCount > 0 || awaitingReviewCount > 0) && (
                 <button 
-                  onClick={() => setCatalogueStatusFilter(awaitingReviewCount > 0 ? 'awaiting_review' : 'failed')}
-                  className="bg-surface border border-border hover:border-yellow-500/50 px-3 py-2 rounded text-left cursor-pointer transition-colors"
+                  onClick={() => setCatalogueStatusFilter(catalogueStatusFilter === 'attention' ? 'all' : 'attention')}
+                  aria-pressed={catalogueStatusFilter === 'attention'}
+                  className={`bg-surface border ${catalogueStatusFilter === 'attention' ? 'border-yellow-500 text-yellow-500 font-bold' : 'border-border hover:border-yellow-500/50'} px-3 py-2 rounded text-left cursor-pointer transition-colors`}
                   title="Filter catalogue by Attention items"
                 >
                   <span className="text-muted uppercase block text-xs font-bold">Attention</span>
