@@ -2,6 +2,19 @@ import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Icon } from "@iconify-icon/react";
 import { BYOKConfig, ProviderTemplate, BYOKTestResult, DEFAULT_PROVIDERS } from "../types/byok";
+import {
+  clearBYOKConfig,
+  fetchBYOKProviders,
+  getBYOKConfig,
+  saveBYOKConfig,
+  testBYOKConnection,
+} from "../api/byok";
+
+interface BYOKSettingsModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onConfigSaved?: (config: BYOKConfig | null) => void;
+}
 
 export const BYOKSettingsModal: React.FC<BYOKSettingsModalProps> = ({
   isOpen,

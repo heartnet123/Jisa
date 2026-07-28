@@ -10,6 +10,7 @@ import { BYOKSettingsModal } from './BYOKSettingsModal';
 import { mangaApi } from '../api/mangaApi';
 import { getBYOKConfig } from '../api/byok';
 import { BYOKConfig } from '../types/byok';
+import type { ProcessedManga } from '../types';
 
 interface ProjectWorkspaceProps {
   projectId?: string;
@@ -103,7 +104,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
   }, []);
 
   // Local state for catalogue status filter
-  type CatalogueStatusFilter = 'all' | 'awaiting_review' | 'failed' | 'completed' | 'processing';
+  type CatalogueStatusFilter = 'all' | 'awaiting_review' | 'failed' | 'completed' | 'processing' | 'attention';
   const [catalogueStatusFilter, setCatalogueStatusFilter] = useState<CatalogueStatusFilter>('all');
 
   // Find active project
@@ -876,7 +877,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
             </div>
           ) : filteredCatalogueJobs.length === 0 ? (
             <div className="p-12 border border-dashed border-[#1c1c1c] text-center text-xs text-[#555] font-mono uppercase bg-[#080808]/50 rounded-lg space-y-3">
-              <p className="font-bold text-muted">No sheets match status filter "{catalogueStatusFilter.replace('_', ' ')}"</p>
+              <p className="font-bold text-muted">No sheets match status filter &quot;{catalogueStatusFilter.replace('_', ' ')}&quot;</p>
               <button
                 onClick={() => setCatalogueStatusFilter('all')}
                 className="px-3 py-1.5 bg-surface border border-border hover:border-accent hover:text-accent rounded text-xs uppercase tracking-wider font-bold transition-all cursor-pointer"

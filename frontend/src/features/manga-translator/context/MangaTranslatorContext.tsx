@@ -5,7 +5,7 @@ import { mangaApi, API_BASE_URL } from '../api/mangaApi';
 import type { ProcessedManga, TranslationConfig, Project, SystemHealth } from '../types';
 import { getBYOKConfig } from '../api/byok';
 
-interface MangaTranslatorContextType {
+export interface MangaTranslatorContextType {
   files: ProcessedManga[];
   setFiles: React.Dispatch<React.SetStateAction<ProcessedManga[]>>;
   projects: Project[];
@@ -301,7 +301,7 @@ export const MangaTranslatorProvider: React.FC<{ children: React.ReactNode }> = 
           if (pendingMatch?.localUrl && (job.originalUrl || job.original_url)) {
             try {
               URL.revokeObjectURL(pendingMatch.localUrl);
-            } catch (e) {
+            } catch {
               // ignore
             }
           }

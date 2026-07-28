@@ -173,6 +173,142 @@ class SQLiteReviewRepositoryTests(unittest.TestCase):
             self.assertEqual(projects[0]["page_order"], ["job-2", "job-1"])
             repo.close()
 
+    def test_create_project_jobs_rolls_back_when_later_job_fails(self) -> None:
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent) as temporary_directory:
+            database_path = Path(temporary_directory) / "state.sqlite3"
+            repo = SQLiteReviewRepository(database_path)
+            repo.save_project(
+                {
+                    "id": "proj-1",
+                    "name": "Rollback Project",
+                    "created_at": "2026-07-17T12:00:00Z",
+                }
+            )
+
+            with self.assertRaises(KeyError):
+                repo.create_project_jobs(
+                    "proj-1",
+                    [
+                        {
+                            "id": "job-1",
+                            "filename": "1.png",
+                            "status": "queued",
+                            "progress": 0,
+                        },
+                        {
+                            "filename": "2.png",
+                            "status": "queued",
+                            "progress": 0,
+                        },
+                    ],
+                )
+
+            self.assertEqual(repo.load_jobs("proj-1"), [])
+            repo.close()
+
+    def test_v1_migration_resumes_with_existing_sequence_id_and_bad_json(self) -> None:
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent) as temporary_directory:
+            database_path = Path(temporary_directory) / "v1_partial.sqlite3"
+            conn = sqlite3.connect(database_path)
+            conn.executescript(
+                """
+                CREATE TABLE jobs (
+                    id TEXT PRIMARY KEY,
+                    filename TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    progress INTEGER NOT NULL,
+                    message TEXT,
+                    error TEXT,
+                    original_url TEXT,
+                    result_url TEXT,
+                    inpainted_url TEXT,
+                    project_id TEXT,
+                    sequence_id INTEGER,
+                    image_width INTEGER,
+                    image_height INTEGER,
+                    region_mode TEXT NOT NULL DEFAULT 'detected',
+                    ocr_text TEXT,
+                    translated_text TEXT,
+                    mask_preview_url TEXT,
+                    preview_revision INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE regions (
+                    id TEXT NOT NULL,
+                    job_id TEXT NOT NULL,
+                    ordinal INTEGER NOT NULL,
+                    x REAL NOT NULL,
+                    y REAL NOT NULL,
+                    width REAL NOT NULL,
+                    height REAL NOT NULL,
+                    source TEXT NOT NULL,
+                    source_text TEXT,
+                    translated_text TEXT,
+                    mask_path TEXT,
+                    PRIMARY KEY (job_id, id),
+                    UNIQUE (job_id, ordinal),
+                    FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE projects (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    job_ids_json TEXT NOT NULL,
+                    page_order_json TEXT NOT NULL
+                );
+
+                PRAGMA user_version = 1;
+                """
+            )
+            conn.execute(
+                "INSERT INTO projects VALUES (?, ?, ?, ?, ?)",
+                (
+                    "proj-1",
+                    "Partial Migration",
+                    "2026-07-17T12:00:00Z",
+                    '{"bad": true}',
+                    '["job-2", "job-1"',
+                ),
+            )
+            conn.execute(
+                "INSERT INTO jobs (id, filename, status, progress, project_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                ("job-1", "001.png", "queued", 0, "proj-1", "2026-07-17T12:00:00Z", "2026-07-17T12:00:00Z"),
+            )
+            conn.execute(
+                "INSERT INTO jobs (id, filename, status, progress, project_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                ("job-2", "002.png", "queued", 0, "proj-1", "2026-07-17T12:00:01Z", "2026-07-17T12:00:01Z"),
+            )
+            conn.commit()
+            conn.close()
+
+            repo = SQLiteReviewRepository(database_path)
+            self.assertEqual(repo._connection.execute("PRAGMA user_version").fetchone()[0], 2)
+            table_names = {
+                row["name"]
+                for row in repo._connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            index_names = {
+                row["name"]
+                for row in repo._connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'index'"
+                ).fetchall()
+            }
+
+            self.assertIn("pending_asset_deletions", table_names)
+            self.assertIn("jobs_project_id_idx", index_names)
+            self.assertIn("jobs_sequence_id_idx", index_names)
+            self.assertIn("jobs_project_sequence_idx", index_names)
+
+            jobs = repo.load_jobs("proj-1")
+            self.assertEqual([job["id"] for job in jobs], ["job-1", "job-2"])
+            self.assertEqual([job["sequence_id"] for job in jobs], [0, 1])
+            repo.close()
+
     def test_create_project_jobs_and_reorder(self) -> None:
         repo = SQLiteReviewRepository(":memory:")
         repo.save_project({"id": "proj-1", "name": "Manga Vol 1", "created_at": "2026-07-17T12:00:00Z"})

@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import React from "react";
 import ProjectWorkspace from "./ProjectWorkspace";
-import { MangaTranslatorContext, MangaTranslatorContextType } from "../context/MangaTranslatorContext";
+import { MangaTranslatorContext } from "../context/MangaTranslatorContext";
+import type { MangaTranslatorContextType } from "../context/MangaTranslatorContext";
 import type { ProcessedManga, Project } from "../types";
 
 vi.mock("next/navigation", () => ({
@@ -16,33 +17,42 @@ const createMockContextValue = (overrides?: Partial<MangaTranslatorContextType>)
   setFiles: vi.fn(),
   projects: [],
   setProjects: vi.fn(),
-  activeProject: null,
-  setActiveProject: vi.fn(),
-  activeHITLItem: null,
-  setActiveHITLItem: vi.fn(),
+  activeProjectId: null,
+  setActiveProjectId: vi.fn(),
+  systemHealth: null,
+  setSystemHealth: vi.fn(),
+  healthLoading: false,
+  setHealthLoading: vi.fn(),
+  isUploading: false,
+  setIsUploading: vi.fn(),
+  isDragging: false,
+  setIsDragging: vi.fn(),
   config: { provider: "ollama", model: "test", systemPrompt: "" },
   setConfig: vi.fn(),
-  byokConfig: null,
-  setByokConfig: vi.fn(),
-  systemHealth: null,
-  healthLoading: false,
-  loadInitialData: vi.fn(),
   sseStatus: "connected",
   bootstrapError: null,
-  isUploading: false,
-  uploadBatch: vi.fn(),
-  handleDeleteJob: vi.fn(),
-  handleDeleteProject: vi.fn(),
-  handleRenameProject: vi.fn(),
-  handleReorderPages: vi.fn(),
-  handleMovePageTo: vi.fn(),
+  activeUploadCount: 0,
   sandboxText: "",
   setSandboxText: vi.fn(),
   sandboxResult: "",
+  setSandboxResult: vi.fn(),
   sandboxLoading: false,
+  setSandboxLoading: vi.fn(),
   sandboxError: null,
+  setSandboxError: vi.fn(),
   sandboxTime: null,
+  setSandboxTime: vi.fn(),
+  loadInitialData: vi.fn(),
+  uploadBatch: vi.fn(),
+  handleUpdate: vi.fn(),
+  handleRemove: vi.fn(),
+  handleMovePage: vi.fn(),
+  handleMovePageTo: vi.fn(),
+  handleRenameProject: vi.fn(),
+  handleDeleteProject: vi.fn(),
   runSandboxTest: vi.fn(),
+  activeHITLItem: null,
+  setActiveHITLItem: vi.fn(),
   ...overrides,
 });
 
