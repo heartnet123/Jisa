@@ -174,7 +174,7 @@ class SQLiteReviewRepositoryTests(unittest.TestCase):
             repo.close()
 
     def test_create_project_jobs_rolls_back_when_later_job_fails(self) -> None:
-        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent) as temporary_directory:
+        with tempfile.TemporaryDirectory() as temporary_directory:
             database_path = Path(temporary_directory) / "state.sqlite3"
             repo = SQLiteReviewRepository(database_path)
             repo.save_project(
@@ -207,7 +207,7 @@ class SQLiteReviewRepositoryTests(unittest.TestCase):
             repo.close()
 
     def test_v1_migration_resumes_with_existing_sequence_id_and_bad_json(self) -> None:
-        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent) as temporary_directory:
+        with tempfile.TemporaryDirectory() as temporary_directory:
             database_path = Path(temporary_directory) / "v1_partial.sqlite3"
             conn = sqlite3.connect(database_path)
             conn.executescript(
@@ -303,6 +303,11 @@ class SQLiteReviewRepositoryTests(unittest.TestCase):
             self.assertIn("jobs_project_id_idx", index_names)
             self.assertIn("jobs_sequence_id_idx", index_names)
             self.assertIn("jobs_project_sequence_idx", index_names)
+
+            projects = repo.load_projects()
+            self.assertEqual(len(projects), 1)
+            self.assertEqual(projects[0]["job_ids"], ["job-1", "job-2"])
+            self.assertEqual(projects[0]["page_order"], ["job-1", "job-2"])
 
             jobs = repo.load_jobs("proj-1")
             self.assertEqual([job["id"] for job in jobs], ["job-1", "job-2"])

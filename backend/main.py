@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import threading
 import math
 import os
 import re
@@ -1006,6 +1007,7 @@ async def translate_manga(
     jobs_to_create: list[dict[str, Any]] = []
     file_paths_for_tasks: list[tuple[str, Path]] = []
     renamed_final_paths: list[Path] = []
+    persisted_ids: list[str] = []
 
     try:
         for temp_path, normalized_filename, file_ext in staged:
@@ -1041,21 +1043,20 @@ async def translate_manga(
         else:
             for j in jobs_to_create:
                 repository.save_job(j)
+                persisted_ids.append(j["id"])
                 jobs_db[j["id"]] = j
             created_jobs = jobs_to_create
     except Exception:
+        for pid in persisted_ids:
+            try:
+                repository.delete_job(pid)
+            except Exception:
+                pass
+            jobs_db.pop(pid, None)
         for temp_path, _, _ in staged:
-            if temp_path.exists():
-                try:
-                    temp_path.unlink()
-                except Exception:
-                    pass
+            _safe_unlink_asset(temp_path)
         for final_path in renamed_final_paths:
-            if final_path.exists():
-                try:
-                    final_path.unlink()
-                except Exception:
-                    pass
+            _safe_unlink_asset(final_path)
         raise
 
     for job_id, final_path in file_paths_for_tasks:
@@ -1610,24 +1611,26 @@ def _safe_unlink_asset(raw_path_or_url: str) -> bool:
 
 MAX_DELETION_ATTEMPTS = 3
 _deletion_attempts: dict[str, int] = {}
+_deletion_lock = threading.Lock()
 
 
 def _drain_pending_asset_deletions(max_attempts: int = MAX_DELETION_ATTEMPTS) -> bool:
-    pending_paths = repository.get_pending_asset_deletions()
-    all_success = True
-    for path in pending_paths:
-        attempts = _deletion_attempts.get(path, 0) + 1
-        _deletion_attempts[path] = attempts
-        if _safe_unlink_asset(path):
-            repository.remove_pending_asset_deletion(path)
-            _deletion_attempts.pop(path, None)
-        else:
-            if attempts >= max_attempts:
-                print(f"Exceeded max deletion attempts ({max_attempts}) for {path}, removing pending record.")
+    with _deletion_lock:
+        pending_paths = repository.get_pending_asset_deletions()
+        all_success = True
+        for path in pending_paths:
+            attempts = _deletion_attempts.get(path, 0) + 1
+            _deletion_attempts[path] = attempts
+            if _safe_unlink_asset(path):
                 repository.remove_pending_asset_deletion(path)
                 _deletion_attempts.pop(path, None)
-            all_success = False
-    return all_success
+            else:
+                if attempts >= max_attempts:
+                    print(f"Exceeded max deletion attempts ({max_attempts}) for {path}, removing pending record.")
+                    repository.remove_pending_asset_deletion(path)
+                    _deletion_attempts.pop(path, None)
+                all_success = False
+        return all_success
 
 
 @app.delete("/api/projects/{project_id}")
@@ -1653,7 +1656,7 @@ async def delete_project(project_id: str, background_tasks: BackgroundTasks):
         repository.enqueue_pending_asset_deletions(failed_paths)
 
     drain_success = await asyncio.to_thread(_drain_pending_asset_deletions)
-    cleanup_pending = bool(failed_paths) or not drain_success
+    cleanup_pending = not drain_success
 
     if cleanup_pending:
         background_tasks.add_task(_drain_pending_asset_deletions)

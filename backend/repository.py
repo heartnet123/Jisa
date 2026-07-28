@@ -161,8 +161,8 @@ class SQLiteReviewRepository:
                             id TEXT PRIMARY KEY,
                             name TEXT NOT NULL,
                             created_at TEXT NOT NULL,
-                            job_ids_json TEXT NOT NULL,
-                            page_order_json TEXT NOT NULL
+                            job_ids_json TEXT,
+                            page_order_json TEXT
                         );
 
                         CREATE TABLE pending_asset_deletions (
@@ -183,7 +183,7 @@ class SQLiteReviewRepository:
                             ON jobs(project_id, sequence_id)
                             WHERE project_id IS NOT NULL;
 
-                        PRAGMA user_version = 2;
+                        PRAGMA user_version = {self.SCHEMA_VERSION};
                         """
                     )
             elif version == 1:
@@ -254,7 +254,7 @@ class SQLiteReviewRepository:
                                 (seq_idx, jid),
                             )
 
-                    self._connection.execute("PRAGMA user_version = 2")
+                    self._connection.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
                 except Exception:
                     self._connection.rollback()
                     raise
@@ -557,19 +557,15 @@ class SQLiteReviewRepository:
             self._connection.execute(
                 """
                 INSERT INTO projects (
-                    id, name, created_at, job_ids_json, page_order_json
-                ) VALUES (?, ?, ?, ?, ?)
+                    id, name, created_at
+                ) VALUES (?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
-                    name = excluded.name,
-                    job_ids_json = excluded.job_ids_json,
-                    page_order_json = excluded.page_order_json
+                    name = excluded.name
                 """,
                 (
                     project["id"],
                     project["name"],
                     project["created_at"],
-                    json.dumps(project.get("job_ids", [])),
-                    json.dumps(project.get("page_order", [])),
                 ),
             )
 

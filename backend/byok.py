@@ -76,18 +76,21 @@ PRESET_PROVIDERS = [
 ]
 
 
+DEFAULT_FALLBACK_MODEL = "gpt-5.4-mini"
+
+
 def get_provider_default_model(provider: str) -> str:
     p_lower = provider.lower()
     for prov in PRESET_PROVIDERS:
         if prov["id"] == p_lower:
             return prov["default_model"]
-    return "gpt-5.4-mini"
+    return DEFAULT_FALLBACK_MODEL
 
 
 class BYOKConfig(BaseModel):
     provider: str = Field(default="openai", description="AI Provider ID (openai, anthropic, gemini, ollama, openrouter, deepseek, custom)")
     api_key: Optional[str] = Field(default=None, description="API Key for the provider")
-    model: str = Field(default="gpt-5.4-mini", description="Model name or ID")
+    model: str = Field(default=DEFAULT_FALLBACK_MODEL, description="Model name or ID")
     api_base: Optional[str] = Field(default=None, description="Custom Base URL if applicable")
     custom_headers: Optional[Dict[str, str]] = Field(default=None, description="Additional HTTP headers")
 

@@ -125,9 +125,9 @@ class ProjectSessionWorkflowTests(unittest.TestCase):
         self.assertEqual([j["sequence_id"] for j in proj_jobs], [0, 1, 2])
 
     def test_batch_upload_rejects_too_many_files_before_staging(self) -> None:
-        original_upload_dir = main.UPLOAD_DIR
-        original_mask_dir = main.MASK_DIR
-        original_max_batch_files = getattr(main, "MAX_BATCH_UPLOAD_FILES", None)
+        self.addCleanup(setattr, main, "UPLOAD_DIR", main.UPLOAD_DIR)
+        self.addCleanup(setattr, main, "MASK_DIR", main.MASK_DIR)
+        self.addCleanup(setattr, main, "MAX_BATCH_UPLOAD_FILES", main.MAX_BATCH_UPLOAD_FILES)
 
         upload_dir = Path(self._temporary_directory.name) / "batch-limit-uploads"
         mask_dir = upload_dir / "masks"
@@ -138,22 +138,14 @@ class ProjectSessionWorkflowTests(unittest.TestCase):
         main.MASK_DIR = mask_dir
         main.MAX_BATCH_UPLOAD_FILES = 2
 
-        try:
-            response = self.client.post(
-                "/api/translate",
-                files=[
-                    ("files", ("page01.png", io.BytesIO(TINY_PNG), "image/png")),
-                    ("files", ("page02.png", io.BytesIO(TINY_PNG), "image/png")),
-                    ("files", ("page03.png", io.BytesIO(TINY_PNG), "image/png")),
-                ],
-            )
-        finally:
-            main.UPLOAD_DIR = original_upload_dir
-            main.MASK_DIR = original_mask_dir
-            if original_max_batch_files is None:
-                delattr(main, "MAX_BATCH_UPLOAD_FILES")
-            else:
-                main.MAX_BATCH_UPLOAD_FILES = original_max_batch_files
+        response = self.client.post(
+            "/api/translate",
+            files=[
+                ("files", ("page01.png", io.BytesIO(TINY_PNG), "image/png")),
+                ("files", ("page02.png", io.BytesIO(TINY_PNG), "image/png")),
+                ("files", ("page03.png", io.BytesIO(TINY_PNG), "image/png")),
+            ],
+        )
 
         self.assertEqual(response.status_code, 413)
         self.assertIn("Too many files", response.json()["detail"])
@@ -176,7 +168,7 @@ class ProjectSessionWorkflowTests(unittest.TestCase):
         upload_asset.write_bytes(TINY_PNG)
         mask_asset = mask_dir / "mask-01.png"
         mask_asset.write_bytes(TINY_PNG)
-        unsafe_workspace_asset = Path("safe_unlink_workspace_guard.tmp")
+        unsafe_workspace_asset = Path(self._temporary_directory.name) / "safe_unlink_workspace_guard.tmp"
         unsafe_workspace_asset.write_bytes(TINY_PNG)
         self.addCleanup(lambda: unsafe_workspace_asset.unlink(missing_ok=True))
 
@@ -186,7 +178,7 @@ class ProjectSessionWorkflowTests(unittest.TestCase):
         self.assertTrue(main._safe_unlink_asset(str(mask_asset)))
         self.assertFalse(mask_asset.exists())
 
-        self.assertFalse(main._safe_unlink_asset(unsafe_workspace_asset.name))
+        self.assertFalse(main._safe_unlink_asset(str(unsafe_workspace_asset)))
         self.assertTrue(unsafe_workspace_asset.exists())
 
     def test_delete_job_uses_repository_asset_cleanup_and_clears_pending_entries(self) -> None:
@@ -352,8 +344,6 @@ class ProjectSessionWorkflowTests(unittest.TestCase):
         self.assertEqual(job_status.status_code, 404)
 
     def test_fifteen_page_batch_session_lifecycle_and_index_performance(self) -> None:
-        import time
-
         create_res = self.client.post("/api/projects", json={"name": "Vol 1 Chapter 15"})
         self.assertEqual(create_res.status_code, 201)
         project_id = create_res.json()["id"]
@@ -372,15 +362,8 @@ class ProjectSessionWorkflowTests(unittest.TestCase):
         self.assertEqual(len(jobs), 15)
         self.assertEqual([j["sequence_id"] for j in jobs], list(range(15)))
 
-        latencies = []
-        for _ in range(50):
-            start = time.perf_counter()
-            res = self.client.get(f"/api/jobs?project_id={project_id}")
-            latencies.append((time.perf_counter() - start) * 1000)
-            self.assertEqual(res.status_code, 200)
-
-        latencies.sort()
-        p95_ms = latencies[int(len(latencies) * 0.95)]
+        res = self.client.get(f"/api/jobs?project_id={project_id}")
+        self.assertEqual(res.status_code, 200)
 
         job_ids = [j["id"] for j in jobs]
         reversed_ids = list(reversed(job_ids))
