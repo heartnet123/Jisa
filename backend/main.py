@@ -1005,41 +1005,58 @@ async def translate_manga(
 
     jobs_to_create: list[dict[str, Any]] = []
     file_paths_for_tasks: list[tuple[str, Path]] = []
+    renamed_final_paths: list[Path] = []
 
-    for temp_path, normalized_filename, file_ext in staged:
-        job_id = str(uuid.uuid4())
-        final_filename = f"{job_id}{file_ext}"
-        final_path = UPLOAD_DIR / final_filename
+    try:
+        for temp_path, normalized_filename, file_ext in staged:
+            job_id = str(uuid.uuid4())
+            final_filename = f"{job_id}{file_ext}"
+            final_path = UPLOAD_DIR / final_filename
 
-        temp_path.rename(final_path)
+            temp_path.rename(final_path)
+            renamed_final_paths.append(final_path)
 
-        job_dict = {
-            "id": job_id,
-            "filename": normalized_filename,
-            "status": "queued",
-            "progress": 0,
-            "message": "Queued for translation.",
-            "original_url": _to_public_url(final_path),
-            "project_id": project_id,
-            "region_mode": "detected",
-            "byok_config": byok_config,
-        }
-        jobs_to_create.append(job_dict)
-        file_paths_for_tasks.append((job_id, final_path))
+            job_dict = {
+                "id": job_id,
+                "filename": normalized_filename,
+                "status": "queued",
+                "progress": 0,
+                "message": "Queued for translation.",
+                "original_url": _to_public_url(final_path),
+                "project_id": project_id,
+                "region_mode": "detected",
+                "byok_config": byok_config,
+            }
+            jobs_to_create.append(job_dict)
+            file_paths_for_tasks.append((job_id, final_path))
 
-    if project_id:
-        created_jobs = repository.create_project_jobs(project_id, jobs_to_create)
-        for j in created_jobs:
-            jobs_db[j["id"]] = j
-        proj_repo = [p for p in repository.load_projects() if p["id"] == project_id]
-        if proj_repo:
-            projects_db[project_id]["job_ids"] = proj_repo[0]["job_ids"]
-            projects_db[project_id]["page_order"] = proj_repo[0]["page_order"]
-    else:
-        for j in jobs_to_create:
-            repository.save_job(j)
-            jobs_db[j["id"]] = j
-        created_jobs = jobs_to_create
+        if project_id:
+            created_jobs = repository.create_project_jobs(project_id, jobs_to_create)
+            for j in created_jobs:
+                jobs_db[j["id"]] = j
+            proj_repo = [p for p in repository.load_projects() if p["id"] == project_id]
+            if proj_repo:
+                projects_db[project_id]["job_ids"] = proj_repo[0]["job_ids"]
+                projects_db[project_id]["page_order"] = proj_repo[0]["page_order"]
+        else:
+            for j in jobs_to_create:
+                repository.save_job(j)
+                jobs_db[j["id"]] = j
+            created_jobs = jobs_to_create
+    except Exception:
+        for temp_path, _, _ in staged:
+            if temp_path.exists():
+                try:
+                    temp_path.unlink()
+                except Exception:
+                    pass
+        for final_path in renamed_final_paths:
+            if final_path.exists():
+                try:
+                    final_path.unlink()
+                except Exception:
+                    pass
+        raise
 
     for job_id, final_path in file_paths_for_tasks:
         background_tasks.add_task(process_manga_task, job_id, str(final_path), byok_config=byok_config)
@@ -1591,19 +1608,30 @@ def _safe_unlink_asset(raw_path_or_url: str) -> bool:
         return False
 
 
-def _drain_pending_asset_deletions() -> bool:
+MAX_DELETION_ATTEMPTS = 3
+_deletion_attempts: dict[str, int] = {}
+
+
+def _drain_pending_asset_deletions(max_attempts: int = MAX_DELETION_ATTEMPTS) -> bool:
     pending_paths = repository.get_pending_asset_deletions()
     all_success = True
     for path in pending_paths:
+        attempts = _deletion_attempts.get(path, 0) + 1
+        _deletion_attempts[path] = attempts
         if _safe_unlink_asset(path):
             repository.remove_pending_asset_deletion(path)
+            _deletion_attempts.pop(path, None)
         else:
+            if attempts >= max_attempts:
+                print(f"Exceeded max deletion attempts ({max_attempts}) for {path}, removing pending record.")
+                repository.remove_pending_asset_deletion(path)
+                _deletion_attempts.pop(path, None)
             all_success = False
     return all_success
 
 
 @app.delete("/api/projects/{project_id}")
-async def delete_project(project_id: str):
+async def delete_project(project_id: str, background_tasks: BackgroundTasks):
     if project_id not in projects_db:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -1624,8 +1652,11 @@ async def delete_project(project_id: str):
     if failed_paths:
         repository.enqueue_pending_asset_deletions(failed_paths)
 
-    drain_success = _drain_pending_asset_deletions()
+    drain_success = await asyncio.to_thread(_drain_pending_asset_deletions)
     cleanup_pending = bool(failed_paths) or not drain_success
+
+    if cleanup_pending:
+        background_tasks.add_task(_drain_pending_asset_deletions)
 
     await notify_state_change()
     return {
