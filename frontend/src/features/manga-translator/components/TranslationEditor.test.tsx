@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { HTMLAttributes, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -132,8 +132,7 @@ describe("TranslationEditor", () => {
     await selectRegion(user);
 
     const source = screen.getByLabelText("Source text");
-    await user.clear(source);
-    await user.type(source, "corrected source");
+    fireEvent.change(source, { target: { value: "corrected source" } });
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() =>

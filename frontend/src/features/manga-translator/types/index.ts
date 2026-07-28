@@ -53,16 +53,25 @@ export interface ProcessedManga {
   progress: number;
   blocks?: BlockItem[];
   project_id?: string;
+  sequence_id?: number;
   region_mode?: "detected" | "manual_override";
   mask_preview_url?: string;
   preview_revision?: number;
 }
 
+export interface BatchUploadResponse {
+  id: string;
+  status: string;
+  jobs?: ProcessedManga[];
+}
+
 export interface TranslationConfig {
-  provider: 'ollama' | 'openai' | 'anthropic';
+  // ponytail: support all LiteLLM providers (openai, anthropic, gemini, openrouter, deepseek, ollama, custom)
+  provider: string;
   model: string;
   systemPrompt: string;
   apiKey?: string;
+  apiBase?: string;
 }
 
 export interface Project {

@@ -3,8 +3,9 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { mangaApi, API_BASE_URL } from '../api/mangaApi';
 import type { ProcessedManga, TranslationConfig, Project, SystemHealth } from '../types';
+import { getBYOKConfig } from '../api/byok';
 
-interface MangaTranslatorContextType {
+export interface MangaTranslatorContextType {
   files: ProcessedManga[];
   setFiles: React.Dispatch<React.SetStateAction<ProcessedManga[]>>;
   projects: Project[];
@@ -54,7 +55,7 @@ interface MangaTranslatorContextType {
   setActiveHITLItem: (item: ProcessedManga | null) => void;
 }
 
-const MangaTranslatorContext = createContext<MangaTranslatorContextType | undefined>(undefined);
+export const MangaTranslatorContext = createContext<MangaTranslatorContextType | undefined>(undefined);
 
 export const ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/bmp', 'image/tiff'];
 
@@ -78,9 +79,23 @@ export const MangaTranslatorProvider: React.FC<{ children: React.ReactNode }> = 
 
   const [config, setConfig] = useState<TranslationConfig>({
     provider: 'openai',
-    model: 'gpt-5.4-mini',
-    systemPrompt: 'Translate this Japanese manga text to English while maintaining the original tone and context.',
+    model: 'gpt-4o-mini',
+    systemPrompt: 'คุณคือผู้แปลมังงะมืออาชีพ แปลภาษาญี่ปุ่นเป็นภาษาไทย โดยรักษาอารมณ์ บริบท และน้ำเสียงของตัวละคร',
   });
+
+  // ponytail: sync saved BYOK config on mount
+  useEffect(() => {
+    const saved = getBYOKConfig();
+    if (saved) {
+      setConfig((prev) => ({
+        ...prev,
+        provider: saved.provider || 'openai',
+        model: saved.model || 'gpt-4o-mini',
+        apiKey: saved.apiKey,
+        apiBase: saved.apiBase,
+      }));
+    }
+  }, []);
 
   // Sandbox states
   const [sandboxText, setSandboxText] = useState('「お前はもう死んでいる。」');
@@ -118,7 +133,7 @@ export const MangaTranslatorProvider: React.FC<{ children: React.ReactNode }> = 
       if (health.translation) {
         setConfig(prev => ({
           ...prev,
-          model: health.translation.model || prev.model,
+          model: prev.model || health.translation.model,
         }));
       }
     } catch (err) {
@@ -181,7 +196,7 @@ export const MangaTranslatorProvider: React.FC<{ children: React.ReactNode }> = 
         if (health.translation) {
           setConfig(prev => ({
             ...prev,
-            model: health.translation.model || prev.model,
+            model: prev.model || health.translation.model,
           }));
         }
       } catch (err) {
@@ -198,9 +213,16 @@ export const MangaTranslatorProvider: React.FC<{ children: React.ReactNode }> = 
       }
     });
 
-    eventSource.onerror = (err) => {
-      console.error('SSE Connection failed/reconnecting:', err);
-      setSseStatus('reconnecting');
+    eventSource.onerror = () => {
+      const isClosed = eventSource.readyState === EventSource.CLOSED;
+      const stateLabel = isClosed
+        ? 'CLOSED (2)'
+        : eventSource.readyState === EventSource.CONNECTING
+        ? 'CONNECTING (0)'
+        : `OPEN (${eventSource.readyState})`;
+
+      console.warn(`[SSE] Connection issue (readyState: ${stateLabel})`);
+      setSseStatus(isClosed ? 'error' : 'reconnecting');
       setHealthLoading(true);
     };
 
@@ -210,12 +232,12 @@ export const MangaTranslatorProvider: React.FC<{ children: React.ReactNode }> = 
   }, []);
 
   const uploadBatch = useCallback(async (fileList: File[], projectId?: string) => {
+    if (!fileList.length) return;
     setActiveUploadCount(prev => prev + fileList.length);
 
-    const uploads = fileList.map(async (file) => {
+    const pendingItems = fileList.map((file, idx) => {
       const localUrl = URL.createObjectURL(file);
-      const pendingJobId = `${file.name}-${Date.now()}`;
-
+      const pendingJobId = `pending-${file.name}-${Date.now()}-${idx}`;
       const tempManga: ProcessedManga = {
         id: pendingJobId,
         filename: file.name,
@@ -225,49 +247,140 @@ export const MangaTranslatorProvider: React.FC<{ children: React.ReactNode }> = 
         progress: 1,
         message: 'Uploading manga page...',
         project_id: projectId,
+        sequence_id: idx,
       };
-
-      setFiles(prev => [tempManga, ...prev]);
-
-      try {
-        const response = await mangaApi.upload(file, config, projectId);
-        const newManga: ProcessedManga = {
-          id: response.id,
-          filename: file.name,
-          originalUrl: localUrl,
-          original_url: localUrl,
-          status: 'queued',
-          progress: 5,
-          message: 'Queued for processing.',
-          project_id: projectId,
-        };
-
-        setFiles(prev => {
-          if (prev.some(f => f.id === response.id)) {
-            return prev.filter(f => f.id !== pendingJobId);
-          }
-          return prev.map(f => f.id === pendingJobId ? newManga : f);
-        });
-      } catch (err) {
-        console.error('Upload failed for', file.name, err);
-        setFiles(prev => prev.map(f =>
-          f.id === pendingJobId
-            ? {
-                ...f,
-                status: 'failed',
-                progress: 0,
-                error: err instanceof Error ? err.message : 'Upload failed',
-                project_id: projectId,
-              }
-            : f,
-        ));
-      } finally {
-        setActiveUploadCount(prev => Math.max(0, prev - 1));
-      }
+      return { file, localUrl, pendingJobId, tempManga };
     });
 
-    await Promise.all(uploads);
-    
+    setFiles(prev => [...pendingItems.map(p => p.tempManga), ...prev]);
+
+    try {
+      const response = await mangaApi.uploadBatch(fileList, config, projectId);
+      const returnedJobs = response.jobs || [];
+
+      setFiles(prev => {
+        const pendingIds = new Set(pendingItems.map((p) => p.pendingJobId));
+        const replacementByPendingId = new Map<string, ProcessedManga>();
+        const replacementIds = new Set<string>();
+        const insertedReplacementIds = new Set<string>();
+        const extraJobs: ProcessedManga[] = [];
+        const usedIndexes = new Set<number>();
+        const usedReturnedIds = new Set<string>();
+
+        const findPendingIndex = (job: ProcessedManga) => {
+          const byFilename = pendingItems.findIndex((pending, index) => {
+            return !usedIndexes.has(index) && pending.tempManga.filename === job.filename;
+          });
+          if (byFilename !== -1) {
+            return byFilename;
+          }
+
+          if (job.sequence_id !== undefined) {
+            const bySequence = pendingItems.findIndex((pending, index) => {
+              return !usedIndexes.has(index) && pending.tempManga.sequence_id === job.sequence_id;
+            });
+            if (bySequence !== -1) {
+              return bySequence;
+            }
+          }
+
+          return pendingItems.findIndex((_, index) => !usedIndexes.has(index));
+        };
+
+        returnedJobs.forEach((job, idx) => {
+          if (usedReturnedIds.has(job.id)) {
+            return;
+          }
+          usedReturnedIds.add(job.id);
+
+          const matchIndex = findPendingIndex(job);
+          const pendingMatch = matchIndex === -1 ? undefined : pendingItems[matchIndex];
+          const localUrl = pendingMatch ? pendingMatch.localUrl : undefined;
+
+          // Revoke local object URL if server URL is returned
+          if (pendingMatch?.localUrl && (job.originalUrl || job.original_url)) {
+            try {
+              URL.revokeObjectURL(pendingMatch.localUrl);
+            } catch {
+              // ignore
+            }
+          }
+
+          const newManga: ProcessedManga = {
+            ...job,
+            originalUrl: job.originalUrl || job.original_url || localUrl || '',
+            original_url: job.original_url || localUrl || '',
+            status: job.status || 'queued',
+            progress: job.progress ?? 5,
+            message: job.message || 'Queued for processing.',
+            project_id: projectId,
+            sequence_id: job.sequence_id ?? (matchIndex === -1 ? idx : matchIndex),
+          };
+
+          if (matchIndex === -1) {
+            extraJobs.push(newManga);
+            return;
+          }
+
+          usedIndexes.add(matchIndex);
+          replacementByPendingId.set(pendingItems[matchIndex].pendingJobId, newManga);
+          replacementIds.add(newManga.id);
+        });
+
+        const rebuilt = prev.flatMap((item) => {
+          const replacement = replacementByPendingId.get(item.id);
+          if (replacement) {
+            insertedReplacementIds.add(replacement.id);
+            return [replacement];
+          }
+          if (pendingIds.has(item.id) || replacementIds.has(item.id)) {
+            return [];
+          }
+          return [item];
+        });
+
+        const existingIds = new Set(rebuilt.map((item) => item.id));
+        const missingReplacements = pendingItems
+          .map((pending) => replacementByPendingId.get(pending.pendingJobId))
+          .filter((job): job is ProcessedManga => Boolean(job))
+          .filter((job) => !insertedReplacementIds.has(job.id) && !existingIds.has(job.id));
+
+        missingReplacements.forEach((job) => {
+          existingIds.add(job.id);
+        });
+
+        const dedupedExtras = extraJobs.filter((job) => {
+          if (existingIds.has(job.id)) {
+            return false;
+          }
+          existingIds.add(job.id);
+          return true;
+        });
+
+        return [...rebuilt, ...missingReplacements, ...dedupedExtras];
+      });
+    } catch (err) {
+      console.error('Batch upload failed:', err);
+      const errMsg = err instanceof Error ? err.message : 'Upload failed';
+      setFiles(prev =>
+        prev.map(f => {
+          const matchedPending = pendingItems.find(p => p.pendingJobId === f.id);
+          if (matchedPending) {
+            return {
+              ...f,
+              status: 'failed',
+              progress: 0,
+              error: errMsg,
+              project_id: projectId,
+            };
+          }
+          return f;
+        })
+      );
+    } finally {
+      setActiveUploadCount(prev => Math.max(0, prev - fileList.length));
+    }
+
     try {
       const health = await mangaApi.getSystemHealth();
       setSystemHealth(health);

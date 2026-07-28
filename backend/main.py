@@ -1,12 +1,13 @@
 import asyncio
 import base64
 import json
+import threading
 import math
 import os
 import re
 import uuid
 from pathlib import Path
-from typing import Dict, List, Literal, Set
+from typing import Any, Dict, List, Literal, Set
 from fastapi.responses import StreamingResponse
 
 
@@ -121,6 +122,7 @@ ALLOWED_IMAGE_CONTENT_TYPES = {
     "image/tiff",
 }
 MAX_UPLOAD_SIZE_BYTES = int(os.getenv("MAX_UPLOAD_SIZE_BYTES", str(25 * 1024 * 1024)))
+MAX_BATCH_UPLOAD_FILES = int(os.getenv("MAX_BATCH_UPLOAD_FILES", "20"))
 
 # Mount static files for access to uploads
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
@@ -369,9 +371,25 @@ def hydrate_repository_state() -> None:
         projects_db[project["id"]] = project
 
 
+class BatchTranslateJobItem(BaseModel):
+    id: str
+    filename: str
+    status: str
+    progress: int
+    project_id: str | None = None
+    sequence_id: int | None = None
+    original_url: str | None = None
+    result_url: str | None = None
+    inpainted_url: str | None = None
+    message: str | None = None
+    error: str | None = None
+
+
+
 class TranslateJobResponse(BaseModel):
     id: str
     status: str
+    jobs: List[BatchTranslateJobItem] | None = None
 
 
 class NormalizedBox(BaseModel):
@@ -453,8 +471,10 @@ class JobStatus(BaseModel):
     error: str | None = None
     result_url: str | None = None
     original_url: str | None = None
+    inpainted_url: str | None = None
     blocks: List[BlockItem] | None = None
     project_id: str | None = None
+    sequence_id: int | None = None
     region_mode: Literal["detected", "manual_override"] = "detected"
     mask_preview_url: str | None = None
     preview_revision: int = 0
@@ -917,64 +937,142 @@ def _verify_image_signature(content: bytes) -> bool:
 async def translate_manga(
     request: Request,
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
+    files: list[UploadFile] | None = File(None),
+    file: UploadFile | None = File(None),
     project_id: str | None = Form(None)
 ):
-    job_id = str(uuid.uuid4())
+    file_list: list[UploadFile] = []
+    if files:
+        if isinstance(files, list):
+            file_list.extend(files)
+        else:
+            file_list.append(files)
+    if file and file not in file_list:
+        file_list.append(file)
+
+    if not file_list:
+        raise HTTPException(status_code=400, detail="No upload files provided.")
+
+    if project_id and project_id not in projects_db:
+        raise HTTPException(status_code=404, detail="Project not found")
+
     byok_config = extract_byok_config(request)
-
-    if file.content_type not in ALLOWED_IMAGE_CONTENT_TYPES:
-        raise HTTPException(
-            status_code=415,
-            detail=f"Unsupported media type: {file.content_type or 'unknown'}",
-        )
-
-    # Save file locally
-    normalized_filename, file_ext = _normalize_upload_filename(file.filename)
-    file_ext = file_ext or ".png"
-    filename = f"{job_id}{file_ext}"
-    file_path = UPLOAD_DIR / filename
-
-    content = await file.read()
-    if len(content) > MAX_UPLOAD_SIZE_BYTES:
+    if len(file_list) > MAX_BATCH_UPLOAD_FILES:
         raise HTTPException(
             status_code=413,
-            detail=f"File exceeds the {MAX_UPLOAD_SIZE_BYTES // (1024 * 1024)}MB limit",
+            detail=f"Too many files provided. Maximum is {MAX_BATCH_UPLOAD_FILES}.",
         )
 
-    if not _verify_image_signature(content):
-        raise HTTPException(
-            status_code=415,
-            detail="Unsupported media type: invalid image signature",
-        )
+    staged: list[tuple[Path, str, str]] = []
 
-    with open(file_path, "wb") as buffer:
-        buffer.write(content)
+    try:
+        for upload_file in file_list:
+            if upload_file.content_type not in ALLOWED_IMAGE_CONTENT_TYPES:
+                raise HTTPException(
+                    status_code=415,
+                    detail=f"Unsupported media type: {upload_file.content_type or 'unknown'}",
+                )
 
-    # Store initial state
-    jobs_db[job_id] = {
-        "id": job_id,
-        "filename": normalized_filename,
-        "status": "queued",
-        "progress": 0,
-        "message": "Queued for translation.",
-        "original_url": _to_public_url(file_path),
-        "project_id": project_id,
-        "region_mode": "detected",
-        "byok_config": byok_config,
-    }
+            content = await upload_file.read()
+            if len(content) > MAX_UPLOAD_SIZE_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File exceeds the {MAX_UPLOAD_SIZE_BYTES // (1024 * 1024)}MB limit",
+                )
 
-    if project_id and project_id in projects_db:
-        projects_db[project_id]["job_ids"].append(job_id)
-        if "page_order" not in projects_db[project_id]:
-            projects_db[project_id]["page_order"] = list(projects_db[project_id]["job_ids"])
+            if not _verify_image_signature(content):
+                raise HTTPException(
+                    status_code=415,
+                    detail="Unsupported media type: invalid image signature",
+                )
+
+            normalized_filename, file_ext = _normalize_upload_filename(upload_file.filename)
+            file_ext = file_ext or ".png"
+            temp_filename = f"temp_{uuid.uuid4()}{file_ext}"
+            temp_path = UPLOAD_DIR / temp_filename
+
+            with open(temp_path, "wb") as buffer:
+                buffer.write(content)
+
+            staged.append((temp_path, normalized_filename, file_ext))
+    except Exception:
+        for temp_path, _, _ in staged:
+            if temp_path.exists():
+                try:
+                    temp_path.unlink()
+                except Exception:
+                    pass
+        raise
+
+    jobs_to_create: list[dict[str, Any]] = []
+    file_paths_for_tasks: list[tuple[str, Path]] = []
+    renamed_final_paths: list[Path] = []
+    persisted_ids: list[str] = []
+
+    try:
+        for temp_path, normalized_filename, file_ext in staged:
+            job_id = str(uuid.uuid4())
+            final_filename = f"{job_id}{file_ext}"
+            final_path = UPLOAD_DIR / final_filename
+
+            temp_path.rename(final_path)
+            renamed_final_paths.append(final_path)
+
+            job_dict = {
+                "id": job_id,
+                "filename": normalized_filename,
+                "status": "queued",
+                "progress": 0,
+                "message": "Queued for translation.",
+                "original_url": _to_public_url(final_path),
+                "project_id": project_id,
+                "region_mode": "detected",
+                "byok_config": byok_config,
+            }
+            jobs_to_create.append(job_dict)
+            file_paths_for_tasks.append((job_id, final_path))
+
+        if project_id:
+            created_jobs = repository.create_project_jobs(project_id, jobs_to_create)
+            for j in created_jobs:
+                jobs_db[j["id"]] = j
+            proj_repo = [p for p in repository.load_projects() if p["id"] == project_id]
+            if proj_repo:
+                projects_db[project_id]["job_ids"] = proj_repo[0]["job_ids"]
+                projects_db[project_id]["page_order"] = proj_repo[0]["page_order"]
         else:
-            projects_db[project_id]["page_order"].append(job_id)
+            for j in jobs_to_create:
+                repository.save_job(j)
+                persisted_ids.append(j["id"])
+                jobs_db[j["id"]] = j
+            created_jobs = jobs_to_create
+    except Exception:
+        for pid in persisted_ids:
+            try:
+                repository.delete_job(pid)
+            except Exception:
+                pass
+            jobs_db.pop(pid, None)
+        for temp_path, _, _ in staged:
+            _safe_unlink_asset(temp_path)
+        for final_path in renamed_final_paths:
+            _safe_unlink_asset(final_path)
+        raise
 
-    background_tasks.add_task(process_manga_task, job_id, str(file_path), byok_config=byok_config)
-    await notify_state_change()
+    for job_id, final_path in file_paths_for_tasks:
+        background_tasks.add_task(process_manga_task, job_id, str(final_path), byok_config=byok_config)
 
-    return {"id": job_id, "status": "queued"}
+    await notify_state_change(
+        job_ids=[j["id"] for j in created_jobs],
+        project_ids=[project_id] if project_id else None,
+    )
+
+    first_job_id = created_jobs[0]["id"] if created_jobs else ""
+    return {
+        "id": first_job_id,
+        "status": "queued",
+        "jobs": [_sanitize_job_for_api(j) for j in created_jobs],
+    }
 
 
 @app.get("/api/byok/providers")
@@ -1401,18 +1499,31 @@ async def sandbox_translate(payload: SandboxPayload):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/jobs")
-async def list_jobs():
+def _sanitize_job_for_api(job: dict) -> dict:
+    job_copy = job.copy()
+    job_copy["status"] = _status_for_api(job_copy.get("status", "queued"))
+    if "blocks_obj" in job_copy:
+        del job_copy["blocks_obj"]
+    if "byok_config" in job_copy:
+        del job_copy["byok_config"]
+    return job_copy
 
-    """Returns a list of all jobs, omitting blocks_obj to keep response size lightweight."""
+
+@app.get("/api/jobs")
+async def list_jobs(project_id: str | None = None):
+    """Returns a list of jobs, optionally filtered by project_id and ordered by sequence_id."""
     result = []
-    for job_id, job in jobs_db.items():
-        job_copy = job.copy()
-        job_copy["status"] = _status_for_api(job_copy.get("status", "queued"))
-        if "blocks_obj" in job_copy:
-            del job_copy["blocks_obj"]
-        result.append(job_copy)
-    return result[::-1]
+    if project_id is not None:
+        db_jobs = repository.load_jobs(project_id=project_id)
+        for repo_job in db_jobs:
+            job_id = repo_job["id"]
+            job = jobs_db.get(job_id, repo_job)
+            result.append(_sanitize_job_for_api(job))
+        return result
+    else:
+        for job_id, job in jobs_db.items():
+            result.append(_sanitize_job_for_api(job))
+        return result[::-1]
 
 
 @app.post("/api/projects", response_model=ProjectResponse, status_code=201)
@@ -1427,15 +1538,15 @@ async def create_project(payload: ProjectCreatePayload):
         "page_order": []
     }
     projects_db[project_id] = project
-    await notify_state_change()
+    await notify_state_change(project_ids=[project_id])
     return project
 
 
 @app.get("/api/projects", response_model=List[ProjectResponse])
 async def list_projects():
-    for proj in projects_db.values():
-        if "page_order" not in proj:
-            proj["page_order"] = list(proj["job_ids"])
+    db_projects = repository.load_projects()
+    for proj in db_projects:
+        projects_db[proj["id"]] = proj
     return list(projects_db.values())[::-1]
 
 
@@ -1443,18 +1554,20 @@ async def list_projects():
 async def reorder_project_pages(project_id: str, payload: ReorderPayload):
     if project_id not in projects_db:
         raise HTTPException(status_code=404, detail="Project not found")
-    project = projects_db[project_id]
-    
-    # Ensure job_ids lists match page_order elements (must be same set of elements)
-    if set(payload.page_order) != set(project["job_ids"]):
-         raise HTTPException(
-             status_code=400, 
-             detail="page_order must contain exactly the project's job IDs"
-         )
-    
-    project["page_order"] = payload.page_order
-    await notify_state_change()
-    return project
+
+    try:
+        new_order = repository.reorder_project(project_id, payload.page_order)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    for idx, jid in enumerate(new_order):
+        if jid in jobs_db:
+            jobs_db[jid]["sequence_id"] = idx
+
+    projects_db[project_id]["page_order"] = new_order
+    projects_db[project_id]["job_ids"] = new_order
+    await notify_state_change(project_ids=[project_id], job_ids=new_order)
+    return projects_db[project_id]
 
 
 @app.put("/api/projects/{project_id}", response_model=ProjectResponse)
@@ -1467,20 +1580,93 @@ async def update_project(project_id: str, payload: ProjectCreatePayload):
     return projects_db[project_id]
 
 
+def _safe_unlink_asset(raw_path_or_url: str) -> bool:
+    if not raw_path_or_url:
+        return True
+    if raw_path_or_url.startswith("/uploads/"):
+        rel_name = raw_path_or_url.removeprefix("/uploads/").split("?", 1)[0]
+        target_path = (UPLOAD_DIR / rel_name).resolve()
+    else:
+        target_path = Path(raw_path_or_url).resolve()
+
+    allowed_roots = [UPLOAD_DIR.resolve(), MASK_DIR.resolve()]
+    for root in allowed_roots:
+        try:
+            target_path.relative_to(root)
+            break
+        except ValueError:
+            continue
+    else:
+        print(f"Refusing to delete path outside managed asset roots: {target_path}")
+        return False
+
+    try:
+        if target_path.exists():
+            target_path.unlink()
+        return True
+    except Exception as exc:
+        print(f"Failed to unlink asset {target_path}: {exc}")
+        return False
+
+
+MAX_DELETION_ATTEMPTS = 3
+_deletion_attempts: dict[str, int] = {}
+_deletion_lock = threading.Lock()
+
+
+def _drain_pending_asset_deletions(max_attempts: int = MAX_DELETION_ATTEMPTS) -> bool:
+    with _deletion_lock:
+        pending_paths = repository.get_pending_asset_deletions()
+        all_success = True
+        for path in pending_paths:
+            attempts = _deletion_attempts.get(path, 0) + 1
+            _deletion_attempts[path] = attempts
+            if _safe_unlink_asset(path):
+                repository.remove_pending_asset_deletion(path)
+                _deletion_attempts.pop(path, None)
+            else:
+                if attempts >= max_attempts:
+                    print(f"Exceeded max deletion attempts ({max_attempts}) for {path}, removing pending record.")
+                    repository.remove_pending_asset_deletion(path)
+                    _deletion_attempts.pop(path, None)
+                all_success = False
+        return all_success
+
+
 @app.delete("/api/projects/{project_id}")
-async def delete_project(project_id: str):
+async def delete_project(project_id: str, background_tasks: BackgroundTasks):
     if project_id not in projects_db:
         raise HTTPException(status_code=404, detail="Project not found")
-    
-    # Disassociate all jobs belonging to this project
-    for job_id in projects_db[project_id]["job_ids"]:
-        if job_id in jobs_db:
-            jobs_db[job_id]["project_id"] = None
-            
-    del projects_db[project_id]
-    repository.delete_project(project_id)
+
+    asset_paths = repository.delete_project_cascade(project_id)
+
+    job_ids_to_del = [jid for jid, j in jobs_db.items() if j.get("project_id") == project_id]
+    for jid in job_ids_to_del:
+        del jobs_db[jid]
+
+    if project_id in projects_db:
+        del projects_db[project_id]
+
+    failed_paths = []
+    for path in asset_paths:
+        if not _safe_unlink_asset(path):
+            failed_paths.append(path)
+
+    if failed_paths:
+        repository.enqueue_pending_asset_deletions(failed_paths)
+
+    drain_success = await asyncio.to_thread(_drain_pending_asset_deletions)
+    cleanup_pending = not drain_success
+
+    if cleanup_pending:
+        background_tasks.add_task(_drain_pending_asset_deletions)
+
     await notify_state_change()
-    return {"status": "deleted", "project_id": project_id}
+    return {
+        "status": "deleted",
+        "project_id": project_id,
+        "cleanup_pending": cleanup_pending,
+    }
 
 
 
@@ -1489,43 +1675,38 @@ async def delete_job(job_id: str):
     """Deletes a job from the database and cleans up associated files on disk."""
     if job_id not in jobs_db:
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
     job = jobs_db[job_id]
-    original_url = job.get("original_url")
-    inpainted_url = job.get("inpainted_url")
-    result_url = job.get("result_url")
-    
-    for url in [original_url, inpainted_url, result_url]:
-        if url and url.startswith("/uploads/"):
-            filename = url.split("/")[-1]
-            file_path = UPLOAD_DIR / filename
-            try:
-                if file_path.exists():
-                    file_path.unlink()
-            except Exception as e:
-                print(f"Error deleting file {file_path}: {e}")
-                
     project_id = job.get("project_id")
+    asset_paths = repository.delete_job_and_compact(job_id)
+
+    for path in asset_paths:
+        if _safe_unlink_asset(path):
+            repository.remove_pending_asset_deletion(path)
+
     if project_id and project_id in projects_db:
         if job_id in projects_db[project_id]["job_ids"]:
             projects_db[project_id]["job_ids"].remove(job_id)
         if "page_order" in projects_db[project_id] and job_id in projects_db[project_id]["page_order"]:
             projects_db[project_id]["page_order"].remove(job_id)
 
-    for region in repository.load_regions(job_id):
-        if region.mask_path:
-            try:
-                Path(region.mask_path).unlink(missing_ok=True)
-            except OSError as exc:
-                print(f"Error deleting mask {region.mask_path}: {exc}")
-    preview_url = job.get("mask_preview_url")
-    if preview_url and preview_url.startswith("/uploads/"):
-        preview_name = preview_url.removeprefix("/uploads/").split("?", 1)[0]
-        (UPLOAD_DIR / preview_name).unlink(missing_ok=True)
-
     del jobs_db[job_id]
-    repository.delete_job(job_id)
-    await notify_state_change()
+    if project_id:
+        db_jobs = repository.load_jobs(project_id=project_id)
+        for repo_job in db_jobs:
+            if repo_job["id"] in jobs_db:
+                jobs_db[repo_job["id"]]["sequence_id"] = repo_job["sequence_id"]
+
+    if project_id and project_id in projects_db:
+        proj_repo = [p for p in repository.load_projects() if p["id"] == project_id]
+        if proj_repo:
+            projects_db[project_id]["job_ids"] = proj_repo[0]["job_ids"]
+            projects_db[project_id]["page_order"] = proj_repo[0]["page_order"]
+        else:
+            projects_db[project_id]["job_ids"] = [jid for jid in projects_db[project_id]["job_ids"] if jid != job_id]
+            projects_db[project_id]["page_order"] = [jid for jid in projects_db[project_id].get("page_order", []) if jid != job_id]
+
+    await notify_state_change(project_ids=[project_id] if project_id else None)
     return {"status": "deleted", "job_id": job_id}
 
 
@@ -1623,6 +1804,7 @@ async def notify_state_change(job_ids: list[str] | str | None = None, project_id
 @app.on_event("startup")
 async def startup_event():
     hydrate_repository_state()
+    _drain_pending_asset_deletions()
 
     async def periodic_health_broadcast():
         while True:
@@ -1669,7 +1851,15 @@ async def stream_events():
         finally:
             event_manager.unsubscribe(queue)
             
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 if __name__ == "__main__":
