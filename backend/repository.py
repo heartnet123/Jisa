@@ -116,7 +116,7 @@ class SQLiteReviewRepository:
             if version == 0:
                 with self._connection:
                     self._connection.executescript(
-                        """
+                        f"""
                         CREATE TABLE jobs (
                             id TEXT PRIMARY KEY,
                             filename TEXT NOT NULL,
