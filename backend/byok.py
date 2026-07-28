@@ -76,10 +76,18 @@ PRESET_PROVIDERS = [
 ]
 
 
+def get_provider_default_model(provider: str) -> str:
+    p_lower = provider.lower()
+    for prov in PRESET_PROVIDERS:
+        if prov["id"] == p_lower:
+            return prov["default_model"]
+    return "gpt-5.4-mini"
+
+
 class BYOKConfig(BaseModel):
     provider: str = Field(default="openai", description="AI Provider ID (openai, anthropic, gemini, ollama, openrouter, deepseek, custom)")
     api_key: Optional[str] = Field(default=None, description="API Key for the provider")
-    model: str = Field(default="gpt-4o-mini", description="Model name or ID")
+    model: str = Field(default="gpt-5.4-mini", description="Model name or ID")
     api_base: Optional[str] = Field(default=None, description="Custom Base URL if applicable")
     custom_headers: Optional[Dict[str, str]] = Field(default=None, description="Additional HTTP headers")
 
@@ -96,7 +104,8 @@ def extract_byok_config(request: Optional[Request] = None, headers: Optional[Dic
 
     provider = header_map.get("x-byok-provider") or os.getenv("BYOK_PROVIDER", "openai")
     api_key = header_map.get("x-byok-key") or os.getenv("BYOK_API_KEY")
-    model = header_map.get("x-byok-model") or os.getenv("BYOK_MODEL", "gpt-4o-mini")
+    default_model = get_provider_default_model(provider)
+    model = header_map.get("x-byok-model") or os.getenv("BYOK_MODEL") or default_model
     api_base = header_map.get("x-byok-api-base") or os.getenv("BYOK_API_BASE")
 
     # Clean up empty strings or placeholders

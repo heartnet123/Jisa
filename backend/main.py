@@ -6,7 +6,7 @@ import os
 import re
 import uuid
 from pathlib import Path
-from typing import Dict, List, Literal, Set
+from typing import Any, Dict, List, Literal, Set
 from fastapi.responses import StreamingResponse
 
 
@@ -121,6 +121,7 @@ ALLOWED_IMAGE_CONTENT_TYPES = {
     "image/tiff",
 }
 MAX_UPLOAD_SIZE_BYTES = int(os.getenv("MAX_UPLOAD_SIZE_BYTES", str(25 * 1024 * 1024)))
+MAX_BATCH_UPLOAD_FILES = int(os.getenv("MAX_BATCH_UPLOAD_FILES", "20"))
 
 # Mount static files for access to uploads
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
@@ -382,9 +383,6 @@ class BatchTranslateJobItem(BaseModel):
     message: str | None = None
     error: str | None = None
 
-
-class BatchTranslateResponse(BaseModel):
-    jobs: List[BatchTranslateJobItem]
 
 
 class TranslateJobResponse(BaseModel):
@@ -958,7 +956,13 @@ async def translate_manga(
         raise HTTPException(status_code=404, detail="Project not found")
 
     byok_config = extract_byok_config(request)
-    staged: list[tuple[UploadFile, bytes, Path, str, str]] = []
+    if len(file_list) > MAX_BATCH_UPLOAD_FILES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Too many files provided. Maximum is {MAX_BATCH_UPLOAD_FILES}.",
+        )
+
+    staged: list[tuple[Path, str, str]] = []
 
     try:
         for upload_file in file_list:
@@ -989,9 +993,9 @@ async def translate_manga(
             with open(temp_path, "wb") as buffer:
                 buffer.write(content)
 
-            staged.append((upload_file, content, temp_path, normalized_filename, file_ext))
+            staged.append((temp_path, normalized_filename, file_ext))
     except Exception:
-        for _, _, temp_path, _, _ in staged:
+        for temp_path, _, _ in staged:
             if temp_path.exists():
                 try:
                     temp_path.unlink()
@@ -1002,7 +1006,7 @@ async def translate_manga(
     jobs_to_create: list[dict[str, Any]] = []
     file_paths_for_tasks: list[tuple[str, Path]] = []
 
-    for upload_file, content, temp_path, normalized_filename, file_ext in staged:
+    for temp_path, normalized_filename, file_ext in staged:
         job_id = str(uuid.uuid4())
         final_filename = f"{job_id}{file_ext}"
         final_path = UPLOAD_DIR / final_filename
@@ -1567,15 +1571,16 @@ def _safe_unlink_asset(raw_path_or_url: str) -> bool:
     else:
         target_path = Path(raw_path_or_url).resolve()
 
-    upload_root = UPLOAD_DIR.resolve()
-    try:
-        target_path.relative_to(upload_root)
-    except ValueError:
+    allowed_roots = [UPLOAD_DIR.resolve(), MASK_DIR.resolve()]
+    for root in allowed_roots:
         try:
-            target_path.relative_to(Path(".").resolve())
+            target_path.relative_to(root)
+            break
         except ValueError:
-            print(f"Refusing to delete path outside workspace: {target_path}")
-            return False
+            continue
+    else:
+        print(f"Refusing to delete path outside managed asset roots: {target_path}")
+        return False
 
     try:
         if target_path.exists():
@@ -1636,42 +1641,22 @@ async def delete_job(job_id: str):
     """Deletes a job from the database and cleans up associated files on disk."""
     if job_id not in jobs_db:
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
     job = jobs_db[job_id]
-    original_url = job.get("original_url")
-    inpainted_url = job.get("inpainted_url")
-    result_url = job.get("result_url")
-    
-    for url in [original_url, inpainted_url, result_url]:
-        if url and url.startswith("/uploads/"):
-            filename = url.split("/")[-1]
-            file_path = UPLOAD_DIR / filename
-            try:
-                if file_path.exists():
-                    file_path.unlink()
-            except Exception as e:
-                print(f"Error deleting file {file_path}: {e}")
-                
     project_id = job.get("project_id")
+    asset_paths = repository.delete_job_and_compact(job_id)
+
+    for path in asset_paths:
+        if _safe_unlink_asset(path):
+            repository.remove_pending_asset_deletion(path)
+
     if project_id and project_id in projects_db:
         if job_id in projects_db[project_id]["job_ids"]:
             projects_db[project_id]["job_ids"].remove(job_id)
         if "page_order" in projects_db[project_id] and job_id in projects_db[project_id]["page_order"]:
             projects_db[project_id]["page_order"].remove(job_id)
 
-    for region in repository.load_regions(job_id):
-        if region.mask_path:
-            try:
-                Path(region.mask_path).unlink(missing_ok=True)
-            except OSError as exc:
-                print(f"Error deleting mask {region.mask_path}: {exc}")
-    preview_url = job.get("mask_preview_url")
-    if preview_url and preview_url.startswith("/uploads/"):
-        preview_name = preview_url.removeprefix("/uploads/").split("?", 1)[0]
-        (UPLOAD_DIR / preview_name).unlink(missing_ok=True)
-
     del jobs_db[job_id]
-    repository.delete_job_and_compact(job_id)
     if project_id:
         db_jobs = repository.load_jobs(project_id=project_id)
         for repo_job in db_jobs:

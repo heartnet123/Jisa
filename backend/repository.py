@@ -27,9 +27,19 @@ class RegionRecord:
 class ReviewRepository(Protocol):
     def save_job(self, job: Mapping[str, Any]) -> None: ...
 
+    def create_project_jobs(
+        self, project_id: str, jobs: Sequence[Mapping[str, Any]]
+    ) -> list[dict[str, Any]]: ...
+
     def load_jobs(self, project_id: str | None = None) -> list[dict[str, Any]]: ...
 
+    def reorder_project(
+        self, project_id: str, page_order: Sequence[str]
+    ) -> list[str]: ...
+
     def delete_job(self, job_id: str) -> None: ...
+
+    def delete_job_and_compact(self, job_id: str) -> list[str]: ...
 
     def replace_regions(
         self, job_id: str, regions: Sequence[RegionRecord]
@@ -43,7 +53,16 @@ class ReviewRepository(Protocol):
 
     def delete_project(self, project_id: str) -> None: ...
 
+    def delete_project_cascade(self, project_id: str) -> list[str]: ...
+
+    def enqueue_pending_asset_deletions(self, paths: Sequence[str]) -> None: ...
+
+    def get_pending_asset_deletions(self) -> list[str]: ...
+
+    def remove_pending_asset_deletion(self, path: str) -> None: ...
+
     def close(self) -> None: ...
+
 
 
 class SQLiteReviewRepository:
@@ -168,37 +187,49 @@ class SQLiteReviewRepository:
                         """
                     )
             elif version == 1:
-                with self._connection:
-                    self._connection.executescript(
-                        """
-                        ALTER TABLE jobs ADD COLUMN sequence_id INTEGER;
+                self._connection.execute("BEGIN IMMEDIATE")
+                try:
+                    jobs_columns = self._table_columns("jobs")
+                    if "sequence_id" not in jobs_columns:
+                        self._connection.execute(
+                            "ALTER TABLE jobs ADD COLUMN sequence_id INTEGER"
+                        )
 
+                    self._connection.execute(
+                        """
                         CREATE TABLE IF NOT EXISTS pending_asset_deletions (
                             path TEXT PRIMARY KEY,
                             created_at TEXT NOT NULL
-                        );
-
-                        CREATE INDEX IF NOT EXISTS jobs_project_id_idx
-                            ON jobs(project_id);
-
-                        CREATE INDEX IF NOT EXISTS jobs_sequence_id_idx
-                            ON jobs(sequence_id);
-
-                        CREATE UNIQUE INDEX IF NOT EXISTS jobs_project_sequence_idx
-                            ON jobs(project_id, sequence_id)
-                            WHERE project_id IS NOT NULL;
+                        )
                         """
                     )
-                    # Backfill sequence_id for existing projects
+                    self._connection.execute(
+                        "CREATE INDEX IF NOT EXISTS jobs_project_id_idx ON jobs(project_id)"
+                    )
+                    self._connection.execute(
+                        "CREATE INDEX IF NOT EXISTS jobs_sequence_id_idx ON jobs(sequence_id)"
+                    )
+                    self._connection.execute(
+                        """
+                        CREATE UNIQUE INDEX IF NOT EXISTS jobs_project_sequence_idx
+                            ON jobs(project_id, sequence_id)
+                            WHERE project_id IS NOT NULL
+                        """
+                    )
+
                     projects = self._connection.execute(
-                        "SELECT * FROM projects"
+                        "SELECT id, job_ids_json, page_order_json FROM projects"
                     ).fetchall()
                     for proj in projects:
                         project_id = proj["id"]
-                        page_order_raw = json.loads(proj["page_order_json"])
-                        job_ids_raw = json.loads(proj["job_ids_json"])
+                        page_order_raw = self._json_list_or_empty(proj["page_order_json"])
+                        job_ids_raw = self._json_list_or_empty(proj["job_ids_json"])
 
-                        # Find actual jobs in DB for this project
+                        self._connection.execute(
+                            "UPDATE jobs SET sequence_id = NULL WHERE project_id = ?",
+                            (project_id,),
+                        )
+
                         db_jobs = self._connection.execute(
                             "SELECT id FROM jobs WHERE project_id = ? ORDER BY created_at, rowid",
                             (project_id,),
@@ -223,9 +254,30 @@ class SQLiteReviewRepository:
                                 (seq_idx, jid),
                             )
 
-                    self._connection.execute("PRAGMA user_version = 2;")
+                    self._connection.execute("PRAGMA user_version = 2")
+                except Exception:
+                    self._connection.rollback()
+                    raise
+                else:
+                    self._connection.commit()
 
-    def save_job(self, job: Mapping[str, Any]) -> None:
+    @staticmethod
+    def _json_list_or_empty(raw: Any) -> list[str]:
+        if not isinstance(raw, str):
+            return []
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(parsed, list):
+            return []
+        return [item for item in parsed if isinstance(item, str)]
+
+    def _table_columns(self, table_name: str) -> set[str]:
+        rows = self._connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+        return {row["name"] for row in rows}
+
+    def _save_job_locked(self, job: Mapping[str, Any]) -> None:
         now = datetime.now(UTC).isoformat()
         values = {
             "id": str(job["id"]),
@@ -255,15 +307,18 @@ class SQLiteReviewRepository:
             for column in self._JOB_COLUMNS
             if column not in {"id", "created_at"}
         )
+        self._connection.execute(
+            f"""
+            INSERT INTO jobs ({', '.join(self._JOB_COLUMNS)})
+            VALUES ({placeholders})
+            ON CONFLICT(id) DO UPDATE SET {assignments}
+            """,
+            tuple(values[column] for column in self._JOB_COLUMNS),
+        )
+
+    def save_job(self, job: Mapping[str, Any]) -> None:
         with self._lock, self._connection:
-            self._connection.execute(
-                f"""
-                INSERT INTO jobs ({', '.join(self._JOB_COLUMNS)})
-                VALUES ({placeholders})
-                ON CONFLICT(id) DO UPDATE SET {assignments}
-                """,
-                tuple(values[column] for column in self._JOB_COLUMNS),
-            )
+            self._save_job_locked(job)
 
     def create_project_jobs(
         self, project_id: str, jobs: Sequence[Mapping[str, Any]]
@@ -281,7 +336,7 @@ class SQLiteReviewRepository:
                 job_dict = dict(job_input)
                 job_dict["project_id"] = project_id
                 job_dict["sequence_id"] = start_seq + i
-                self.save_job(job_dict)
+                self._save_job_locked(job_dict)
                 saved_jobs.append(job_dict)
             return saved_jobs
 
