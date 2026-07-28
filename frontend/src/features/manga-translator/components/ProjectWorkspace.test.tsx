@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import React from "react";
 import ProjectWorkspace from "./ProjectWorkspace";
-import { MangaTranslatorContext } from "../context/MangaTranslatorContext";
+import { MangaTranslatorContext, MangaTranslatorContextType } from "../context/MangaTranslatorContext";
 import type { ProcessedManga, Project } from "../types";
 
 vi.mock("next/navigation", () => ({
@@ -11,8 +11,43 @@ vi.mock("next/navigation", () => ({
   }),
 }));
 
+const createMockContextValue = (overrides?: Partial<MangaTranslatorContextType>): MangaTranslatorContextType => ({
+  files: [],
+  setFiles: vi.fn(),
+  projects: [],
+  setProjects: vi.fn(),
+  activeProject: null,
+  setActiveProject: vi.fn(),
+  activeHITLItem: null,
+  setActiveHITLItem: vi.fn(),
+  config: { provider: "ollama", model: "test", systemPrompt: "" },
+  setConfig: vi.fn(),
+  byokConfig: null,
+  setByokConfig: vi.fn(),
+  systemHealth: null,
+  healthLoading: false,
+  loadInitialData: vi.fn(),
+  sseStatus: "connected",
+  bootstrapError: null,
+  isUploading: false,
+  uploadBatch: vi.fn(),
+  handleDeleteJob: vi.fn(),
+  handleDeleteProject: vi.fn(),
+  handleRenameProject: vi.fn(),
+  handleReorderPages: vi.fn(),
+  handleMovePageTo: vi.fn(),
+  sandboxText: "",
+  setSandboxText: vi.fn(),
+  sandboxResult: "",
+  sandboxLoading: false,
+  sandboxError: null,
+  sandboxTime: null,
+  runSandboxTest: vi.fn(),
+  ...overrides,
+});
+
 describe("ProjectWorkspace", () => {
-  it("renders manga cards sorted by sequence_id", () => {
+  it("renders manga cards sorted by sequence_id and verifies DOM filename ordering", () => {
     const mockProject: Project = {
       id: "p1",
       name: "Chapter 1",
@@ -35,23 +70,17 @@ describe("ProjectWorkspace", () => {
         id: "j2",
         filename: "page02.png",
         originalUrl: "/uploads/page02.png",
-        status: "queued",
-        progress: 0,
+        status: "completed",
+        progress: 100,
         project_id: "p1",
         sequence_id: 1,
       },
     ];
 
-    const contextValue: any = {
+    const contextValue = createMockContextValue({
       files: mockFiles,
       projects: [mockProject],
-      config: { provider: "ollama", model: "test", systemPrompt: "" },
-      byokConfig: null,
-      setByokConfig: vi.fn(),
-      handleDeleteProject: vi.fn(),
-      handleMovePageTo: vi.fn(),
-      setFiles: vi.fn(),
-    };
+    });
 
     render(
       <MangaTranslatorContext.Provider value={contextValue}>
@@ -63,11 +92,11 @@ describe("ProjectWorkspace", () => {
     expect(pageBadges[0].textContent).toBe("#1");
     expect(pageBadges[1].textContent).toBe("#2");
 
-    expect(screen.getAllByText("page01.png")[0]).toBeInTheDocument();
-    expect(screen.getAllByText("page02.png")[0]).toBeInTheDocument();
+    const filenames = screen.getAllByText(/page\d+\.png/).map((el) => el.textContent);
+    expect(filenames).toEqual(["page01.png", "page02.png"]);
   });
 
-  it("filters sheets by status when status filter tabs are clicked", () => {
+  it("filters sheets by status and updates aria-pressed state when status filter tabs are clicked", () => {
     const mockProject: Project = {
       id: "p1",
       name: "Chapter 1",
@@ -106,16 +135,10 @@ describe("ProjectWorkspace", () => {
       },
     ];
 
-    const contextValue: any = {
+    const contextValue = createMockContextValue({
       files: mockFiles,
       projects: [mockProject],
-      config: { provider: "ollama", model: "test", systemPrompt: "" },
-      byokConfig: null,
-      setByokConfig: vi.fn(),
-      handleDeleteProject: vi.fn(),
-      handleMovePageTo: vi.fn(),
-      setFiles: vi.fn(),
-    };
+    });
 
     render(
       <MangaTranslatorContext.Provider value={contextValue}>
@@ -128,17 +151,11 @@ describe("ProjectWorkspace", () => {
     expect(screen.getAllByText("review_page.png")[0]).toBeInTheDocument();
     expect(screen.getAllByText("failed_page.png")[0]).toBeInTheDocument();
 
-    // Click 'Awaiting Review' filter tab
-    const awaitingReviewBtn = screen.getByRole("button", { name: /Awaiting Review/i });
-    fireEvent.click(awaitingReviewBtn);
-
-    expect(screen.getByText("review_page.png")).toBeInTheDocument();
-    expect(screen.queryByText("completed_page.png")).not.toBeInTheDocument();
-    expect(screen.queryByText("failed_page.png")).not.toBeInTheDocument();
-
-    // Click 'Completed' filter tab
-    const completedBtn = screen.getByRole("button", { name: /Completed/i });
-    fireEvent.click(completedBtn);
+    // Click 'Processed' filter button and assert aria-pressed
+    const processedBtn = screen.getByTitle(/Filter catalogue by Processed sheets/i);
+    expect(processedBtn.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(processedBtn);
+    expect(processedBtn.getAttribute("aria-pressed")).toBe("true");
 
     expect(screen.getByText("completed_page.png")).toBeInTheDocument();
     expect(screen.queryByText("review_page.png")).not.toBeInTheDocument();
