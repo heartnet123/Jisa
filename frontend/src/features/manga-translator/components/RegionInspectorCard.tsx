@@ -236,24 +236,47 @@ export function RegionInspectorCard({
               </label>
 
               <div>
-                <div className="flex justify-between mb-1">
-                  <label htmlFor={`fontsize-${block.id}`} className="font-mono text-[11px] uppercase tracking-wider text-muted">
-                    {typesettingValue.auto_fit ? "Max Size" : "Font Size"}
-                  </label>
-                  <span className="font-mono text-xs text-accent font-bold">
-                    {currentFontSize}pt
-                  </span>
+                <label htmlFor={`fontsize-${block.id}`} className="mb-1 block font-mono text-[11px] uppercase tracking-wider text-muted">
+                  {typesettingValue.auto_fit ? "Max Size" : "Font Size"}
+                </label>
+                <div className="flex items-center border border-border bg-panel p-0.5 rounded">
+                  <button
+                    type="button"
+                    disabled={disabled || busy || currentFontSize <= fontSizeMin}
+                    onClick={() => handleFontSizeChange(Math.max(fontSizeMin, currentFontSize - 1))}
+                    className="flex h-7 w-7 items-center justify-center rounded font-mono text-xs font-bold text-muted hover:bg-surface hover:text-main disabled:opacity-30 transition-colors"
+                    aria-label="Decrease font size"
+                  >
+                    &lt;
+                  </button>
+                  <div className="flex flex-1 items-center justify-center font-mono text-xs font-bold text-accent">
+                    <input
+                      id={`fontsize-${block.id}`}
+                      type="number"
+                      min={fontSizeMin}
+                      max={fontSizeMax}
+                      value={currentFontSize}
+                      disabled={disabled || busy}
+                      onChange={e => {
+                        const val = Number(e.target.value);
+                        if (!isNaN(val)) {
+                          handleFontSizeChange(Math.max(fontSizeMin, Math.min(fontSizeMax, val)));
+                        }
+                      }}
+                      className="w-8 bg-transparent text-right font-mono text-xs font-bold text-accent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none disabled:opacity-50"
+                    />
+                    <span className="ml-0.5">pt</span>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={disabled || busy || currentFontSize >= fontSizeMax}
+                    onClick={() => handleFontSizeChange(Math.min(fontSizeMax, currentFontSize + 1))}
+                    className="flex h-7 w-7 items-center justify-center rounded font-mono text-xs font-bold text-muted hover:bg-surface hover:text-main disabled:opacity-30 transition-colors"
+                    aria-label="Increase font size"
+                  >
+                    &gt;
+                  </button>
                 </div>
-                <input
-                  id={`fontsize-${block.id}`}
-                  type="range"
-                  min={fontSizeMin}
-                  max={fontSizeMax}
-                  value={currentFontSize}
-                  disabled={disabled || busy}
-                  onChange={e => handleFontSizeChange(Number(e.target.value))}
-                  className="w-full accent-accent"
-                />
               </div>
             </div>
 
@@ -283,25 +306,56 @@ export function RegionInspectorCard({
               </div>
 
               <div>
-                <div className="flex justify-between mb-1">
-                  <label htmlFor={`padding-${block.id}`} className="font-mono text-[11px] uppercase tracking-wider text-muted">
-                    Padding
-                  </label>
-                  <span className="font-mono text-xs text-accent font-bold">
-                    {Math.round((typesettingValue.padding_ratio ?? 0.1) * 100)}%
-                  </span>
+                <label htmlFor={`padding-${block.id}`} className="mb-1 block font-mono text-[11px] uppercase tracking-wider text-muted">
+                  Padding
+                </label>
+                <div className="flex items-center border border-border bg-panel p-0.5 rounded">
+                  <button
+                    type="button"
+                    disabled={disabled || busy || Math.round((typesettingValue.padding_ratio ?? 0.1) * 100) <= 0}
+                    onClick={() => {
+                      const currentPct = Math.round((typesettingValue.padding_ratio ?? 0.1) * 100);
+                      const nextPct = Math.max(0, currentPct - 1);
+                      handlePaddingChange(Number((nextPct / 100).toFixed(2)));
+                    }}
+                    className="flex h-7 w-7 items-center justify-center rounded font-mono text-xs font-bold text-muted hover:bg-surface hover:text-main disabled:opacity-30 transition-colors"
+                    aria-label="Decrease padding"
+                  >
+                    &lt;
+                  </button>
+                  <div className="flex flex-1 items-center justify-center font-mono text-xs font-bold text-accent">
+                    <input
+                      id={`padding-${block.id}`}
+                      type="number"
+                      min={0}
+                      max={30}
+                      value={Math.round((typesettingValue.padding_ratio ?? 0.1) * 100)}
+                      disabled={disabled || busy}
+                      onChange={e => {
+                        const val = Number(e.target.value);
+                        if (!isNaN(val)) {
+                          const clamped = Math.max(0, Math.min(30, val));
+                          handlePaddingChange(Number((clamped / 100).toFixed(2)));
+                        }
+                      }}
+                      className="w-7 bg-transparent text-right font-mono text-xs font-bold text-accent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none disabled:opacity-50"
+                    />
+                    <span className="ml-0.5">%</span>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={disabled || busy || Math.round((typesettingValue.padding_ratio ?? 0.1) * 100) >= 30}
+                    onClick={() => {
+                      const currentPct = Math.round((typesettingValue.padding_ratio ?? 0.1) * 100);
+                      const nextPct = Math.min(30, currentPct + 1);
+                      handlePaddingChange(Number((nextPct / 100).toFixed(2)));
+                    }}
+                    className="flex h-7 w-7 items-center justify-center rounded font-mono text-xs font-bold text-muted hover:bg-surface hover:text-main disabled:opacity-30 transition-colors"
+                    aria-label="Increase padding"
+                  >
+                    &gt;
+                  </button>
                 </div>
-                <input
-                  id={`padding-${block.id}`}
-                  type="range"
-                  min={0}
-                  max={0.3}
-                  step={0.01}
-                  value={typesettingValue.padding_ratio ?? 0.1}
-                  disabled={disabled || busy}
-                  onChange={e => handlePaddingChange(Number(e.target.value))}
-                  className="w-full accent-accent"
-                />
               </div>
             </div>
           </div>

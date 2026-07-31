@@ -243,4 +243,28 @@ describe("TranslationEditor", () => {
     );
     expect(onClose).toHaveBeenCalledOnce();
   });
+
+  it("adjusts font size and padding using stepper controls", async () => {
+    const user = userEvent.setup();
+    renderEditor();
+    await selectRegion(user);
+
+    const fontInput = screen.getByLabelText("Max Size") as HTMLInputElement;
+    expect(fontInput.value).toBe("20");
+
+    await user.click(screen.getByRole("button", { name: "Increase font size" }));
+    expect(fontInput.value).toBe("21");
+
+    await user.click(screen.getByRole("button", { name: "Decrease font size" }));
+    expect(fontInput.value).toBe("20");
+
+    const paddingInput = screen.getByLabelText("Padding") as HTMLInputElement;
+    expect(paddingInput.value).toBe("10");
+
+    await user.click(screen.getByRole("button", { name: "Increase padding" }));
+    expect(paddingInput.value).toBe("11");
+
+    await user.click(screen.getByRole("button", { name: "Decrease padding" }));
+    expect(paddingInput.value).toBe("10");
+  });
 });
