@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import io
 import json
 import threading
 import math
@@ -284,6 +285,13 @@ def _public_region(region: RegionRecord) -> dict:
         "text": region.source_text,
         "translated_text": region.translated_text,
         "mask_available": bool(region.mask_path),
+        "typesetting": {
+            "font_name": region.font_name,
+            "font_size": region.font_size,
+            "auto_fit": region.auto_fit,
+            "text_align": region.text_align,
+            "padding_ratio": region.padding_ratio,
+        },
     }
 
 
@@ -410,6 +418,14 @@ class NormalizedBox(BaseModel):
         return self.x, self.y, self.width, self.height
 
 
+class TypesettingSettings(BaseModel):
+    font_name: str | None = None
+    font_size: int | None = Field(default=None, ge=8, le=72)
+    auto_fit: bool = True
+    text_align: Literal["left", "center", "right"] = "center"
+    padding_ratio: float = Field(default=0.10, ge=0.0, le=0.30)
+
+
 class BlockItem(BaseModel):
     id: str
     box: NormalizedBox
@@ -417,6 +433,7 @@ class BlockItem(BaseModel):
     text: str | None = None
     translated_text: str | None = None
     mask_available: bool = False
+    typesetting: TypesettingSettings = Field(default_factory=TypesettingSettings)
 
 
 class RegionMutation(BaseModel):
@@ -424,6 +441,7 @@ class RegionMutation(BaseModel):
     box: NormalizedBox
     text: str | None = None
     translated_text: str | None = None
+    typesetting: TypesettingSettings | None = None
 
 
 class ReplaceRegionsPayload(BaseModel):
@@ -440,12 +458,64 @@ class ReplaceRegionsPayload(BaseModel):
 class PatchRegionPayload(BaseModel):
     text: str | None = None
     translated_text: str | None = None
+    typesetting: TypesettingSettings | None = None
 
     @model_validator(mode="after")
     def validate_non_empty_patch(self) -> "PatchRegionPayload":
         if not self.model_fields_set:
-            raise ValueError("At least one text field must be provided")
+            raise ValueError("At least one field must be provided")
         return self
+
+
+class TypesettingFontItem(BaseModel):
+    name: str
+    label: str
+
+
+class IntRange(BaseModel):
+    min: int
+    max: int
+
+
+class FloatRange(BaseModel):
+    min: float
+    max: float
+    step: float
+    default: float
+
+
+class TypesettingOptionsResponse(BaseModel):
+    fonts: List[TypesettingFontItem]
+    default_font_name: str | None = None
+    font_size: IntRange
+    padding_ratio: FloatRange
+    alignments: List[str]
+
+
+class TypesetPreviewRequest(BaseModel):
+    client_revision: int = 0
+    translated_text: str | None = None
+    typesetting: TypesettingSettings = Field(default_factory=TypesettingSettings)
+
+
+class TypesetPreviewBounds(BaseModel):
+    x: int
+    y: int
+    width: int
+    height: int
+
+
+class TypesetPreviewResponse(BaseModel):
+    client_revision: int
+    mime_type: str = "image/png"
+    overlay_base64: str
+    bounds_px: TypesetPreviewBounds
+    lines: List[str]
+    requested_font_size: int | None = None
+    resolved_font_size: int
+    auto_shrunk: bool
+    overflow: bool
+    truncated: bool
 
 
 class RegionCollectionResponse(BaseModel):
@@ -854,15 +924,27 @@ async def resume_manga_task(
 
         typeset_blocks = []
         if blocks:
-            # One TypesetBlock per detected bubble with its own translated text
+            region_map = {r.id: r for r in repository.load_regions(job_id)}
+            # One TypesetBlock per detected bubble with its own translated text & settings
             for block in blocks:
                 tx = (block.translated_text or "").strip()
                 if tx:
+                    reg = region_map.get(block.id)
+                    font_name = reg.font_name if reg else None
+                    font_size = reg.font_size if reg else None
+                    auto_fit = reg.auto_fit if reg else True
+                    text_align = reg.text_align if reg else "center"
+                    padding_ratio = reg.padding_ratio if reg else 0.10
                     typeset_blocks.append(
                         TypesetBlock(
                             id=block.id,
                             box=block.box,
                             text=tx,
+                            font_name=font_name,
+                            font_size=font_size,
+                            auto_fit=auto_fit,
+                            text_align=text_align,
+                            padding_ratio=padding_ratio,
                             mask=block.mask,
                         )
                     )
@@ -1205,6 +1287,25 @@ async def replace_job_regions(
             if "translated_text" not in mutation.model_fields_set:
                 translated_text = previous.translated_text
 
+        font_name = previous.font_name if previous else None
+        font_size = previous.font_size if previous else None
+        auto_fit = previous.auto_fit if previous else True
+        text_align = previous.text_align if previous else "center"
+        padding_ratio = previous.padding_ratio if previous else 0.10
+
+        if mutation.typesetting is not None:
+            ts = mutation.typesetting
+            if "font_name" in ts.model_fields_set:
+                font_name = ts.font_name
+            if "font_size" in ts.model_fields_set:
+                font_size = ts.font_size
+            if "auto_fit" in ts.model_fields_set:
+                auto_fit = ts.auto_fit
+            if "text_align" in ts.model_fields_set:
+                text_align = ts.text_align
+            if "padding_ratio" in ts.model_fields_set:
+                padding_ratio = ts.padding_ratio
+
         saved_regions.append(
             RegionRecord(
                 id=mutation.id,
@@ -1218,6 +1319,11 @@ async def replace_job_regions(
                 source_text=source_text,
                 translated_text=translated_text,
                 mask_path=previous.mask_path if geometry_unchanged else None,
+                font_name=font_name,
+                font_size=font_size,
+                auto_fit=auto_fit,
+                text_align=text_align,
+                padding_ratio=padding_ratio,
             )
         )
 
@@ -1273,6 +1379,25 @@ async def patch_job_region(
     if "translated_text" in payload.model_fields_set:
         translated_text = payload.translated_text
 
+    font_name = current.font_name
+    font_size = current.font_size
+    auto_fit = current.auto_fit
+    text_align = current.text_align
+    padding_ratio = current.padding_ratio
+
+    if payload.typesetting is not None:
+        ts = payload.typesetting
+        if "font_name" in ts.model_fields_set:
+            font_name = ts.font_name
+        if "font_size" in ts.model_fields_set:
+            font_size = ts.font_size
+        if "auto_fit" in ts.model_fields_set:
+            auto_fit = ts.auto_fit
+        if "text_align" in ts.model_fields_set:
+            text_align = ts.text_align
+        if "padding_ratio" in ts.model_fields_set:
+            padding_ratio = ts.padding_ratio
+
     regions[region_index] = RegionRecord(
         id=current.id,
         job_id=current.job_id,
@@ -1285,6 +1410,11 @@ async def patch_job_region(
         source_text=source_text,
         translated_text=translated_text,
         mask_path=current.mask_path,
+        font_name=font_name,
+        font_size=font_size,
+        auto_fit=auto_fit,
+        text_align=text_align,
+        padding_ratio=padding_ratio,
     )
     repository.replace_regions(job_id, regions)
     _hydrate_job_regions(job)
@@ -1341,6 +1471,105 @@ async def rerun_region_ocr(job_id: str, region_id: str) -> BlockItem:
     _hydrate_job_regions(job)
     await notify_state_change()
     return BlockItem.model_validate(job["blocks"][region_index])
+
+
+@app.get("/api/typesetting/options", response_model=TypesettingOptionsResponse)
+async def get_typesetting_options() -> TypesettingOptionsResponse:
+    fonts = typesetter.list_available_fonts()
+    default_name = Path(typesetter.font_path).name if typesetter.font_path else None
+    return TypesettingOptionsResponse(
+        fonts=[TypesettingFontItem(name=f["name"], label=f["label"]) for f in fonts],
+        default_font_name=default_name,
+        font_size=IntRange(min=typesetter.min_font_size, max=typesetter.max_font_size),
+        padding_ratio=FloatRange(min=0.0, max=0.30, step=0.01, default=typesetter.padding_ratio),
+        alignments=["left", "center", "right"],
+    )
+
+
+@app.post(
+    "/api/jobs/{job_id}/regions/{region_id}/typeset-preview",
+    response_model=TypesetPreviewResponse,
+)
+async def generate_region_typeset_preview(
+    job_id: str, region_id: str, payload: TypesetPreviewRequest
+) -> TypesetPreviewResponse:
+    job = _require_review_job(job_id)
+    regions = repository.load_regions(job_id)
+    region = next((r for r in regions if r.id == region_id), None)
+    if region is None:
+        raise HTTPException(status_code=404, detail="Region not found")
+
+    image_width = int(job.get("image_width") or 0)
+    image_height = int(job.get("image_height") or 0)
+    if image_width <= 0 or image_height <= 0:
+        raise HTTPException(
+            status_code=409,
+            detail="Source image dimensions are unavailable for job",
+        )
+
+    translated_text = (
+        payload.translated_text
+        if "translated_text" in payload.model_fields_set
+        else region.translated_text
+    ) or ""
+
+    box_px = normalized_box_to_pixels(
+        (region.x, region.y, region.width, region.height),
+        image_width,
+        image_height,
+    )
+
+    mask = None
+    if region.source == "detected" and region.mask_path:
+        loaded = cv2.imread(region.mask_path, cv2.IMREAD_GRAYSCALE)
+        if loaded is not None and loaded.shape == (image_height, image_width):
+            mask = (loaded > 0).astype(np.uint8)
+
+    if mask is None:
+        mask = np.zeros((image_height, image_width), dtype=np.uint8)
+        x, y, w, h = box_px
+        mask[y : y + h, x : x + w] = 1
+
+    block = TypesetBlock(
+        id=region_id,
+        box=box_px,
+        text=translated_text,
+        font_name=payload.typesetting.font_name,
+        font_size=payload.typesetting.font_size,
+        auto_fit=payload.typesetting.auto_fit,
+        text_align=payload.typesetting.text_align,
+        padding_ratio=payload.typesetting.padding_ratio,
+        mask=mask,
+    )
+
+    try:
+        crop_img, bounds_px, layout = typesetter.render_block_preview_crop(
+            block, (image_height, image_width)
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    buf = io.BytesIO()
+    crop_img.save(buf, format="PNG")
+    b64_str = base64.b64encode(buf.getvalue()).decode("utf-8")
+
+    return TypesetPreviewResponse(
+        client_revision=payload.client_revision,
+        mime_type="image/png",
+        overlay_base64=b64_str,
+        bounds_px=TypesetPreviewBounds(
+            x=bounds_px[0],
+            y=bounds_px[1],
+            width=bounds_px[2],
+            height=bounds_px[3],
+        ),
+        lines=layout.lines,
+        requested_font_size=layout.requested_font_size,
+        resolved_font_size=layout.font_size,
+        auto_shrunk=layout.auto_shrunk,
+        overflow=layout.overflow,
+        truncated=layout.truncated,
+    )
 
 
 @app.post(

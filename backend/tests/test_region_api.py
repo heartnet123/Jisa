@@ -296,6 +296,80 @@ class RegionApiTests(unittest.TestCase):
         self.assertIn("Detected mask is unavailable", response.json()["detail"])
         self.assertEqual(self.repository.load_regions("job-1"), before)
 
+    def test_typesetting_options_endpoint(self) -> None:
+        response = self.client.get("/api/typesetting/options")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("fonts", data)
+        self.assertTrue(len(data["fonts"]) > 0)
+        self.assertEqual(data["font_size"]["min"], 8)
+        self.assertEqual(data["font_size"]["max"], 72)
+        self.assertEqual(data["alignments"], ["left", "center", "right"])
+
+    def test_typesetting_preview_endpoint(self) -> None:
+        cv2.imwrite(
+            str(main.UPLOAD_DIR / "page.png"),
+            np.full((1600, 1000, 3), 255, dtype=np.uint8),
+        )
+        response = self.client.post(
+            "/api/jobs/job-1/regions/region-1/typeset-preview",
+            json={
+                "client_revision": 5,
+                "translated_text": "ข้อความพรีวิวใหม่",
+                "typesetting": {
+                    "font_name": "Itim-Regular.ttf",
+                    "font_size": 24,
+                    "auto_fit": True,
+                    "text_align": "left",
+                    "padding_ratio": 0.1,
+                },
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["client_revision"], 5)
+        self.assertEqual(data["mime_type"], "image/png")
+        self.assertTrue(len(data["overlay_base64"]) > 0)
+        self.assertGreater(data["bounds_px"]["width"], 0)
+        self.assertFalse(data["overflow"])
+
+    def test_typesetting_preview_invalid_font_returns_422(self) -> None:
+        cv2.imwrite(
+            str(main.UPLOAD_DIR / "page.png"),
+            np.full((1600, 1000, 3), 255, dtype=np.uint8),
+        )
+        response = self.client.post(
+            "/api/jobs/job-1/regions/region-1/typeset-preview",
+            json={
+                "typesetting": {
+                    "font_name": "../invalid.ttf",
+                },
+            },
+        )
+        self.assertEqual(response.status_code, 422)
+
+    def test_replace_and_patch_job_regions_preserves_typesetting(self) -> None:
+        with patch.object(main, "notify_state_change", new=AsyncMock()):
+            patch_resp = self.client.patch(
+                "/api/jobs/job-1/regions/region-1",
+                json={
+                    "typesetting": {
+                        "font_name": "Itim-Regular.ttf",
+                        "font_size": 28,
+                        "auto_fit": False,
+                        "text_align": "right",
+                        "padding_ratio": 0.15,
+                    }
+                },
+            )
+        self.assertEqual(patch_resp.status_code, 200)
+        patched_data = patch_resp.json()
+        self.assertEqual(patched_data["typesetting"]["font_name"], "Itim-Regular.ttf")
+        self.assertEqual(patched_data["typesetting"]["font_size"], 28)
+        self.assertFalse(patched_data["typesetting"]["auto_fit"])
+        self.assertEqual(patched_data["typesetting"]["text_align"], "right")
+        self.assertAlmostEqual(patched_data["typesetting"]["padding_ratio"], 0.15)
+
 
 if __name__ == "__main__":
     unittest.main()
