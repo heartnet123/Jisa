@@ -264,6 +264,11 @@ def _persist_runtime_regions(job_id: str, blocks: List[TextBlock]) -> None:
                 source_text=block.text,
                 translated_text=block.translated_text,
                 mask_path=mask_path,
+                font_name=prior.font_name if prior else None,
+                font_size=prior.font_size if prior else None,
+                auto_fit=prior.auto_fit if prior else True,
+                text_align=prior.text_align if prior else "center",
+                padding_ratio=prior.padding_ratio if prior else 0.10,
             )
         )
 

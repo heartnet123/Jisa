@@ -133,6 +133,11 @@ class PipelineRegionOverrideTests(unittest.TestCase):
                     source="manual",
                     source_text="source",
                     translated_text="draft",
+                    font_name="Itim-Regular.ttf",
+                    font_size=32,
+                    auto_fit=False,
+                    text_align="right",
+                    padding_ratio=0.2,
                 )
             ],
         )
@@ -159,6 +164,12 @@ class PipelineRegionOverrideTests(unittest.TestCase):
             self.repository.load_regions("job-1")[0].translated_text,
             "approved",
         )
+        approved_region = self.repository.load_regions("job-1")[0]
+        self.assertEqual(approved_region.font_name, "Itim-Regular.ttf")
+        self.assertEqual(approved_region.font_size, 32)
+        self.assertFalse(approved_region.auto_fit)
+        self.assertEqual(approved_region.text_align, "right")
+        self.assertAlmostEqual(approved_region.padding_ratio, 0.2)
 
 
 if __name__ == "__main__":
