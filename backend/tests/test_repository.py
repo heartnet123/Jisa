@@ -90,6 +90,123 @@ class SQLiteReviewRepositoryTests(unittest.TestCase):
             self.assertEqual(project["page_order"], ["job-1"])
             reopened.close()
 
+    def test_typesetting_settings_persisted_and_reopened(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            database_path = Path(temporary_directory) / "state.sqlite3"
+            repository = SQLiteReviewRepository(database_path)
+            repository.save_job(
+                {
+                    "id": "job-ts-1",
+                    "filename": "page.png",
+                    "status": "awaiting_review",
+                    "progress": 55,
+                    "original_url": "/uploads/page.png",
+                    "created_at": "2026-07-31T12:00:00+00:00",
+                }
+            )
+            repository.replace_regions(
+                "job-ts-1",
+                [
+                    RegionRecord(
+                        id="region-custom",
+                        job_id="job-ts-1",
+                        order=0,
+                        x=0.1,
+                        y=0.1,
+                        width=0.4,
+                        height=0.3,
+                        source="detected",
+                        translated_text="ข้อความทดสอบ",
+                        font_name="Itim-Regular.ttf",
+                        font_size=32,
+                        auto_fit=False,
+                        text_align="left",
+                        padding_ratio=0.15,
+                    )
+                ],
+            )
+            repository.close()
+
+            reopened = SQLiteReviewRepository(database_path)
+            regions = reopened.load_regions("job-ts-1")
+            self.assertEqual(len(regions), 1)
+            reg = regions[0]
+            self.assertEqual(reg.font_name, "Itim-Regular.ttf")
+            self.assertEqual(reg.font_size, 32)
+            self.assertFalse(reg.auto_fit)
+            self.assertEqual(reg.text_align, "left")
+            self.assertAlmostEqual(reg.padding_ratio, 0.15)
+            reopened.close()
+
+    def test_v2_to_v3_migration_adds_typesetting_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            database_path = Path(temporary_directory) / "v2_state.sqlite3"
+            conn = sqlite3.connect(database_path)
+            conn.executescript(
+                """
+                CREATE TABLE jobs (
+                    id TEXT PRIMARY KEY,
+                    filename TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    progress INTEGER NOT NULL,
+                    message TEXT,
+                    error TEXT,
+                    original_url TEXT,
+                    result_url TEXT,
+                    inpainted_url TEXT,
+                    project_id TEXT,
+                    sequence_id INTEGER,
+                    image_width INTEGER,
+                    image_height INTEGER,
+                    region_mode TEXT NOT NULL DEFAULT 'detected',
+                    ocr_text TEXT,
+                    translated_text TEXT,
+                    mask_preview_url TEXT,
+                    preview_revision INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE regions (
+                    id TEXT NOT NULL,
+                    job_id TEXT NOT NULL,
+                    ordinal INTEGER NOT NULL,
+                    x REAL NOT NULL,
+                    y REAL NOT NULL,
+                    width REAL NOT NULL,
+                    height REAL NOT NULL,
+                    source TEXT NOT NULL,
+                    source_text TEXT,
+                    translated_text TEXT,
+                    mask_path TEXT,
+                    PRIMARY KEY (job_id, id)
+                );
+
+                PRAGMA user_version = 2;
+                """
+            )
+            conn.execute(
+                "INSERT INTO jobs (id, filename, status, progress, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                ("job-1", "001.png", "queued", 0, "2026-07-31T12:00:00Z", "2026-07-31T12:00:00Z"),
+            )
+            conn.execute(
+                "INSERT INTO regions (id, job_id, ordinal, x, y, width, height, source, translated_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("reg-1", "job-1", 0, 0.1, 0.1, 0.2, 0.2, "manual", "ข้อความดั้งเดิม"),
+            )
+            conn.commit()
+            conn.close()
+
+            repo = SQLiteReviewRepository(database_path)
+            regions = repo.load_regions("job-1")
+            self.assertEqual(len(regions), 1)
+            reg = regions[0]
+            self.assertIsNone(reg.font_name)
+            self.assertIsNone(reg.font_size)
+            self.assertTrue(reg.auto_fit)
+            self.assertEqual(reg.text_align, "center")
+            self.assertAlmostEqual(reg.padding_ratio, 0.10)
+            repo.close()
+
     def test_v1_to_v2_migration_backfills_sequence_id(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             database_path = Path(temporary_directory) / "v1_state.sqlite3"
@@ -285,7 +402,7 @@ class SQLiteReviewRepositoryTests(unittest.TestCase):
             conn.close()
 
             repo = SQLiteReviewRepository(database_path)
-            self.assertEqual(repo._connection.execute("PRAGMA user_version").fetchone()[0], 2)
+            self.assertEqual(repo._connection.execute("PRAGMA user_version").fetchone()[0], 3)
             table_names = {
                 row["name"]
                 for row in repo._connection.execute(
