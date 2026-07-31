@@ -68,15 +68,30 @@ export function RegionInspectorCard({
   };
 
   const handleAutoFitChange = (autoFit: boolean) => {
-    onTypesettingChange(block.id, {
-      ...typesettingValue,
-      auto_fit: autoFit,
-    });
+    if (autoFit) {
+      const resolvedFontSize = previewStatus?.resolved_font_size;
+      const nextSize = resolvedFontSize ?? currentFontSize;
+      setFontSizeInput(String(nextSize));
+      onTypesettingChange(block.id, {
+        ...typesettingValue,
+        auto_fit: true,
+        font_size: nextSize,
+      });
+    } else {
+      setFontSizeInput(String(currentFontSize));
+      onTypesettingChange(block.id, {
+        ...typesettingValue,
+        auto_fit: false,
+        font_size: currentFontSize,
+      });
+    }
   };
 
   const handleFontSizeChange = (size: number) => {
+    setFontSizeInput(String(size));
     onTypesettingChange(block.id, {
       ...typesettingValue,
+      auto_fit: false,
       font_size: size,
     });
   };
@@ -105,6 +120,7 @@ export function RegionInspectorCard({
   const [fontSizeInput, setFontSizeInput] = useState<string>(String(currentFontSize));
   const [paddingInput, setPaddingInput] = useState<string>(String(currentPaddingPercent));
 
+
   useEffect(() => {
     setFontSizeInput(String(currentFontSize));
   }, [currentFontSize]);
@@ -120,7 +136,7 @@ export function RegionInspectorCard({
     }
     const clamped = Math.max(fontSizeMin, Math.min(fontSizeMax, num));
     setFontSizeInput(String(clamped));
-    if (clamped !== (typesettingValue.font_size ?? 20)) {
+    if (clamped !== currentFontSize) {
       handleFontSizeChange(clamped);
     }
   };
@@ -262,23 +278,26 @@ export function RegionInspectorCard({
               </select>
             </div>
 
-            {/* Auto-fit and Font Size */}
+            {/* Font Size & Padding */}
             <div className="grid grid-cols-2 gap-3 items-center">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={typesettingValue.auto_fit}
-                  disabled={disabled || busy}
-                  onChange={e => handleAutoFitChange(e.target.checked)}
-                  className="accent-accent"
-                />
-                <span className="font-mono text-xs text-main">Auto-fit text</span>
-              </label>
-
               <div>
-                <label htmlFor={`fontsize-${block.id}`} className="mb-1 block font-mono text-[11px] uppercase tracking-wider text-muted">
-                  {typesettingValue.auto_fit ? "Max Size" : "Font Size"}
-                </label>
+                <div className="mb-1 flex items-center justify-between">
+                  <label htmlFor={`fontsize-${block.id}`} className="font-mono text-[11px] uppercase tracking-wider text-muted">
+                    {typesettingValue.auto_fit ? "Max Size" : "Font Size"}
+                  </label>
+                  <label className="flex items-center gap-1 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={typesettingValue.auto_fit}
+                      disabled={disabled || busy}
+                      onChange={e => handleAutoFitChange(e.target.checked)}
+                      className="accent-accent h-3 w-3"
+                    />
+                    <span className="font-mono text-[10px] uppercase tracking-wider text-muted hover:text-main">
+                      Auto-fit
+                    </span>
+                  </label>
+                </div>
                 <div className="flex items-center border border-border bg-panel p-0.5 rounded">
                   <button
                     type="button"
@@ -324,32 +343,6 @@ export function RegionInspectorCard({
                   >
                     &gt;
                   </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Alignment & Padding */}
-            <div className="grid grid-cols-2 gap-3 items-center">
-              <div>
-                <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider text-muted">
-                  Alignment
-                </label>
-                <div className="flex border border-border bg-panel p-0.5 rounded">
-                  {(["left", "center", "right"] as TextAlign[]).map(align => (
-                    <button
-                      key={align}
-                      type="button"
-                      disabled={disabled || busy}
-                      onClick={() => handleAlignChange(align)}
-                      className={`flex-1 py-1 text-center font-mono text-xs uppercase tracking-wider transition-colors ${
-                        typesettingValue.text_align === align
-                          ? "bg-accent font-bold text-white"
-                          : "text-muted hover:text-main"
-                      }`}
-                    >
-                      {align[0]}
-                    </button>
-                  ))}
                 </div>
               </div>
 
@@ -403,6 +396,30 @@ export function RegionInspectorCard({
                     &gt;
                   </button>
                 </div>
+              </div>
+            </div>
+
+            {/* Alignment */}
+            <div>
+              <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider text-muted">
+                Alignment
+              </label>
+              <div className="flex border border-border bg-panel p-0.5 rounded">
+                {(["left", "center", "right"] as TextAlign[]).map(align => (
+                  <button
+                    key={align}
+                    type="button"
+                    disabled={disabled || busy}
+                    onClick={() => handleAlignChange(align)}
+                    className={`flex-1 py-1 text-center font-mono text-xs uppercase tracking-wider transition-colors ${
+                      typesettingValue.text_align === align
+                        ? "bg-accent font-bold text-white"
+                        : "text-muted hover:text-main"
+                    }`}
+                  >
+                    {align[0]}
+                  </button>
+                ))}
               </div>
             </div>
           </div>

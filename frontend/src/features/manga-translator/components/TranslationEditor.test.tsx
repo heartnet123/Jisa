@@ -274,4 +274,65 @@ describe("TranslationEditor", () => {
     fireEvent.blur(fontInput);
     expect(fontInput.value).toBe("15");
   });
+
+  it("syncs Auto-fit with max size and unchecks Auto-fit when font size is manually changed", async () => {
+    const user = userEvent.setup();
+    api.generateTypesetPreview.mockImplementation(async (_jobId, _regionId, req) => ({
+      client_revision: req.client_revision,
+      mime_type: "image/png",
+      overlay_base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+      bounds_px: { x: 100, y: 320, width: 300, height: 160 },
+      lines: ["Line 1"],
+      resolved_font_size: req.typesetting.auto_fit ? 14 : req.typesetting.font_size ?? 20,
+      auto_shrunk: false,
+      overflow: false,
+      truncated: false,
+    }));
+    renderEditor();
+    await selectRegion(user);
+
+    const autoFitCheckbox = screen.getByRole("checkbox", { name: "Auto-fit" }) as HTMLInputElement;
+    expect(autoFitCheckbox.checked).toBe(true);
+
+    const fontInput = screen.getByLabelText("Max Size") as HTMLInputElement;
+    await waitFor(() => expect(fontInput.value).toBe("14"));
+    await waitFor(() =>
+      expect(api.generateTypesetPreview).toHaveBeenLastCalledWith(
+        "job-1",
+        "region-1",
+        expect.objectContaining({
+          typesetting: expect.objectContaining({ auto_fit: true, font_size: 14 }),
+        }),
+      ),
+    );
+
+    // Disabling Auto-fit keeps the resolved size as the manual font size.
+    await user.click(autoFitCheckbox);
+    expect(autoFitCheckbox.checked).toBe(false);
+    expect(screen.getByLabelText("Font Size")).toHaveValue("14");
+
+    // Re-checking Auto-fit keeps the synced max size.
+    await user.click(autoFitCheckbox);
+    expect(autoFitCheckbox.checked).toBe(true);
+    await waitFor(() => expect(screen.getByLabelText("Max Size")).toHaveValue("14"));
+
+    // Manually changing font size unchecks Auto-fit and uses the displayed value as its baseline.
+    await user.click(screen.getByRole("button", { name: "Increase font size" }));
+    expect(autoFitCheckbox.checked).toBe(false);
+    expect(screen.getByLabelText("Font Size")).toHaveValue("15");
+  });
+
+  it("keeps Auto-fit checked when the max size is blurred without a value change", async () => {
+    const user = userEvent.setup();
+    renderEditor();
+    await selectRegion(user);
+
+    const autoFitCheckbox = screen.getByRole("checkbox", { name: "Auto-fit" }) as HTMLInputElement;
+    const fontInput = screen.getByLabelText("Max Size") as HTMLInputElement;
+    await waitFor(() => expect(fontInput.value).toBe("20"));
+
+    fireEvent.blur(fontInput);
+    expect(autoFitCheckbox.checked).toBe(true);
+    expect(screen.getByLabelText("Max Size")).toBeInTheDocument();
+  });
 });

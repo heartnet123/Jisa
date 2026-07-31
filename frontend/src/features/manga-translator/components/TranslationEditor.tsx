@@ -141,6 +141,21 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
         });
 
         if (clientRevisionsRef.current[blockId] === res.client_revision) {
+          const currentTypesetting = editedTypesetting[blockId] ?? defaultTypesetting(selectedBlock.typesetting);
+          if (
+            currentTypesetting.auto_fit &&
+            res.resolved_font_size !== undefined &&
+            currentTypesetting.font_size !== res.resolved_font_size
+          ) {
+            setEditedTypesetting(previous => ({
+              ...previous,
+              [blockId]: {
+                ...(previous[blockId] ?? currentTypesetting),
+                font_size: res.resolved_font_size,
+              },
+            }));
+          }
+
           setPreviewCache(prev => ({
             ...prev,
             [blockId]: {
