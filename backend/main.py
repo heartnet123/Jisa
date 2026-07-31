@@ -744,7 +744,7 @@ async def process_manga_task(job_id: str, image_path: str, byok_config: BYOKConf
         jobs_db[job_id]["status"] = "segmenting"
         jobs_db[job_id]["progress"] = 10
         jobs_db[job_id]["message"] = "Detecting speech bubbles."
-        await notify_state_change()
+        await notify_state_change(job_ids=job_id)
 
         manual_override = jobs_db[job_id].get("region_mode") == "manual_override"
         if manual_override:
@@ -765,7 +765,7 @@ async def process_manga_task(job_id: str, image_path: str, byok_config: BYOKConf
         jobs_db[job_id]["status"] = "ocr"
         jobs_db[job_id]["progress"] = 30
         jobs_db[job_id]["message"] = "Running OCR on detected text regions."
-        await notify_state_change()
+        await notify_state_change(job_ids=job_id)
 
 
         if blocks:
@@ -804,7 +804,7 @@ async def process_manga_task(job_id: str, image_path: str, byok_config: BYOKConf
         jobs_db[job_id]["status"] = "translating"
         jobs_db[job_id]["progress"] = 50
         jobs_db[job_id]["message"] = "Translating extracted text."
-        await notify_state_change()
+        await notify_state_change(job_ids=job_id)
 
         byok_cfg = byok_config or jobs_db[job_id].get("byok_config")
         source_texts = [b.text or "" for b in blocks]
@@ -843,7 +843,7 @@ async def process_manga_task(job_id: str, image_path: str, byok_config: BYOKConf
         jobs_db[job_id]["progress"] = 55
         jobs_db[job_id]["message"] = "Awaiting manual review of translations."
         _persist_runtime_regions(job_id, blocks)
-        await notify_state_change()
+        await notify_state_change(job_ids=job_id)
 
 
     except Exception as e:
@@ -855,7 +855,7 @@ async def process_manga_task(job_id: str, image_path: str, byok_config: BYOKConf
         jobs_db[job_id]["error"] = error_message
         jobs_db[job_id]["message"] = f"Job stopped: {error_message}"
         jobs_db[job_id]["progress"] = min(jobs_db[job_id].get("progress", 0), 95)
-        await notify_state_change()
+        await notify_state_change(job_ids=job_id)
 
 
 
@@ -882,7 +882,7 @@ async def resume_manga_task(
         jobs_db[job_id]["status"] = "inpainting"
         jobs_db[job_id]["progress"] = 65
         jobs_db[job_id]["message"] = "Removing source text from the image."
-        await notify_state_change()
+        await notify_state_change(job_ids=job_id)
 
 
         # Unload segmenter (YOLO + SAM) before loading LaMa (VRAM budget)
@@ -924,7 +924,7 @@ async def resume_manga_task(
         jobs_db[job_id]["status"] = "typesetting"
         jobs_db[job_id]["progress"] = 80
         jobs_db[job_id]["message"] = "Rendering translated text into the page."
-        await notify_state_change()
+        await notify_state_change(job_ids=job_id)
 
 
         typeset_blocks = []
@@ -968,7 +968,7 @@ async def resume_manga_task(
         jobs_db[job_id]["progress"] = 100
         jobs_db[job_id]["message"] = "Translation completed."
         jobs_db[job_id]["result_url"] = _to_public_url(final_path)
-        await notify_state_change()
+        await notify_state_change(job_ids=job_id)
 
 
     except Exception as e:
@@ -980,7 +980,7 @@ async def resume_manga_task(
         jobs_db[job_id]["error"] = error_message
         jobs_db[job_id]["message"] = f"Job stopped: {error_message}"
         jobs_db[job_id]["progress"] = min(jobs_db[job_id].get("progress", 0), 95)
-        await notify_state_change()
+        await notify_state_change(job_ids=job_id)
 
 
 
@@ -1351,7 +1351,7 @@ async def replace_job_regions(
         except OSError as exc:
             print(f"Error deleting stale mask {mask_path}: {exc}")
 
-    await notify_state_change()
+    await notify_state_change(job_ids=job_id)
     return RegionCollectionResponse(
         region_mode="manual_override",
         regions=[BlockItem.model_validate(region) for region in job["blocks"]],
@@ -1423,7 +1423,7 @@ async def patch_job_region(
     )
     repository.replace_regions(job_id, regions)
     _hydrate_job_regions(job)
-    await notify_state_change()
+    await notify_state_change(job_ids=job_id)
     return BlockItem.model_validate(job["blocks"][region_index])
 
 
@@ -1474,7 +1474,7 @@ async def rerun_region_ocr(job_id: str, region_id: str) -> BlockItem:
     )
     repository.replace_regions(job_id, regions)
     _hydrate_job_regions(job)
-    await notify_state_change()
+    await notify_state_change(job_ids=job_id)
     return BlockItem.model_validate(job["blocks"][region_index])
 
 
@@ -1619,7 +1619,7 @@ async def generate_mask_preview(job_id: str) -> MaskPreviewResponse:
     job["preview_revision"] = revision
     job["mask_preview_url"] = preview_url
     repository.save_job(job)
-    await notify_state_change()
+    await notify_state_change(job_ids=job_id)
     return MaskPreviewResponse(url=preview_url, revision=revision)
 
 
@@ -1669,7 +1669,7 @@ async def approve_job(
     file_path = UPLOAD_DIR / filename
 
     background_tasks.add_task(resume_manga_task, job_id, str(file_path))
-    await notify_state_change()
+    await notify_state_change(job_ids=job_id)
 
     return {"status": "resumed"}
 
@@ -1688,7 +1688,7 @@ async def cancel_job(job_id: str):
 
     job["status"] = "canceled"
     job["message"] = "Job canceled by user."
-    await notify_state_change()
+    await notify_state_change(job_ids=job_id)
     return {"status": "canceled"}
 
 
@@ -1810,7 +1810,7 @@ async def update_project(project_id: str, payload: ProjectCreatePayload):
         raise HTTPException(status_code=404, detail="Project not found")
     
     projects_db[project_id]["name"] = payload.name
-    await notify_state_change()
+    await notify_state_change(project_ids=project_id)
     return projects_db[project_id]
 
 

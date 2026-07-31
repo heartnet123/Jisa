@@ -171,6 +171,41 @@ class PipelineRegionOverrideTests(unittest.TestCase):
         self.assertEqual(approved_region.text_align, "right")
         self.assertAlmostEqual(approved_region.padding_ratio, 0.2)
 
+    def test_approval_persists_resuming_state(self) -> None:
+        self._seed_job(status="awaiting_review")
+        self.repository.replace_regions(
+            "job-1",
+            [
+                RegionRecord(
+                    id="region-1",
+                    job_id="job-1",
+                    order=0,
+                    x=0.1,
+                    y=0.1,
+                    width=0.4,
+                    height=0.3,
+                    source="detected",
+                    source_text="source",
+                    translated_text="draft",
+                )
+            ],
+        )
+        client = TestClient(main.app)
+
+        with (
+            patch.object(main, "resume_manga_task", new=AsyncMock()),
+            patch.object(main, "get_system_health", new=AsyncMock(return_value={})),
+            patch.object(main.event_manager, "publish", new=AsyncMock()),
+        ):
+            response = client.post(
+                "/api/jobs/job-1/approve",
+                json={"translations": {"region-1": "approved"}},
+            )
+
+        client.close()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.repository.load_jobs()[0]["status"], "inpainting")
+
 
 if __name__ == "__main__":
     unittest.main()
