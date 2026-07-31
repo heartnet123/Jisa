@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Icon } from "@iconify-icon/react";
 import { motion } from "framer-motion";
 import type {
@@ -97,6 +98,45 @@ export function RegionInspectorCard({
   const fontSizeMin = typesettingOptions?.font_size.min ?? 8;
   const fontSizeMax = typesettingOptions?.font_size.max ?? 72;
   const currentFontSize = typesettingValue.font_size ?? 20;
+
+  const currentPaddingRatio = typesettingValue.padding_ratio ?? 0.1;
+  const currentPaddingPercent = Math.round(currentPaddingRatio * 100);
+
+  const [fontSizeInput, setFontSizeInput] = useState<string>(String(currentFontSize));
+  const [paddingInput, setPaddingInput] = useState<string>(String(currentPaddingPercent));
+
+  useEffect(() => {
+    setFontSizeInput(String(currentFontSize));
+  }, [currentFontSize]);
+
+  useEffect(() => {
+    setPaddingInput(String(currentPaddingPercent));
+  }, [currentPaddingPercent]);
+
+  const commitFontSize = (valStr: string) => {
+    let num = parseInt(valStr, 10);
+    if (isNaN(num)) {
+      num = currentFontSize;
+    }
+    const clamped = Math.max(fontSizeMin, Math.min(fontSizeMax, num));
+    setFontSizeInput(String(clamped));
+    if (clamped !== (typesettingValue.font_size ?? 20)) {
+      handleFontSizeChange(clamped);
+    }
+  };
+
+  const commitPadding = (valStr: string) => {
+    let num = parseInt(valStr, 10);
+    if (isNaN(num)) {
+      num = currentPaddingPercent;
+    }
+    const clamped = Math.max(0, Math.min(30, num));
+    setPaddingInput(String(clamped));
+    const newRatio = Number((clamped / 100).toFixed(2));
+    if (newRatio !== (typesettingValue.padding_ratio ?? 0.1)) {
+      handlePaddingChange(newRatio);
+    }
+  };
 
   return (
     <motion.article
@@ -243,7 +283,11 @@ export function RegionInspectorCard({
                   <button
                     type="button"
                     disabled={disabled || busy || currentFontSize <= fontSizeMin}
-                    onClick={() => handleFontSizeChange(Math.max(fontSizeMin, currentFontSize - 1))}
+                    onClick={() => {
+                      const next = Math.max(fontSizeMin, currentFontSize - 1);
+                      setFontSizeInput(String(next));
+                      handleFontSizeChange(next);
+                    }}
                     className="flex h-7 w-7 items-center justify-center rounded font-mono text-xs font-bold text-muted hover:bg-surface hover:text-main disabled:opacity-30 transition-colors"
                     aria-label="Decrease font size"
                   >
@@ -252,25 +296,29 @@ export function RegionInspectorCard({
                   <div className="flex flex-1 items-center justify-center font-mono text-xs font-bold text-accent">
                     <input
                       id={`fontsize-${block.id}`}
-                      type="number"
-                      min={fontSizeMin}
-                      max={fontSizeMax}
-                      value={currentFontSize}
+                      type="text"
+                      inputMode="numeric"
+                      value={fontSizeInput}
                       disabled={disabled || busy}
-                      onChange={e => {
-                        const val = Number(e.target.value);
-                        if (!isNaN(val)) {
-                          handleFontSizeChange(Math.max(fontSizeMin, Math.min(fontSizeMax, val)));
+                      onChange={e => setFontSizeInput(e.target.value)}
+                      onBlur={() => commitFontSize(fontSizeInput)}
+                      onKeyDown={e => {
+                        if (e.key === "Enter") {
+                          e.currentTarget.blur();
                         }
                       }}
-                      className="w-8 bg-transparent text-right font-mono text-xs font-bold text-accent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none disabled:opacity-50"
+                      className="w-8 bg-transparent text-right font-mono text-xs font-bold text-accent outline-none disabled:opacity-50"
                     />
                     <span className="ml-0.5">pt</span>
                   </div>
                   <button
                     type="button"
                     disabled={disabled || busy || currentFontSize >= fontSizeMax}
-                    onClick={() => handleFontSizeChange(Math.min(fontSizeMax, currentFontSize + 1))}
+                    onClick={() => {
+                      const next = Math.min(fontSizeMax, currentFontSize + 1);
+                      setFontSizeInput(String(next));
+                      handleFontSizeChange(next);
+                    }}
                     className="flex h-7 w-7 items-center justify-center rounded font-mono text-xs font-bold text-muted hover:bg-surface hover:text-main disabled:opacity-30 transition-colors"
                     aria-label="Increase font size"
                   >
@@ -312,10 +360,10 @@ export function RegionInspectorCard({
                 <div className="flex items-center border border-border bg-panel p-0.5 rounded">
                   <button
                     type="button"
-                    disabled={disabled || busy || Math.round((typesettingValue.padding_ratio ?? 0.1) * 100) <= 0}
+                    disabled={disabled || busy || currentPaddingPercent <= 0}
                     onClick={() => {
-                      const currentPct = Math.round((typesettingValue.padding_ratio ?? 0.1) * 100);
-                      const nextPct = Math.max(0, currentPct - 1);
+                      const nextPct = Math.max(0, currentPaddingPercent - 1);
+                      setPaddingInput(String(nextPct));
                       handlePaddingChange(Number((nextPct / 100).toFixed(2)));
                     }}
                     className="flex h-7 w-7 items-center justify-center rounded font-mono text-xs font-bold text-muted hover:bg-surface hover:text-main disabled:opacity-30 transition-colors"
@@ -326,28 +374,27 @@ export function RegionInspectorCard({
                   <div className="flex flex-1 items-center justify-center font-mono text-xs font-bold text-accent">
                     <input
                       id={`padding-${block.id}`}
-                      type="number"
-                      min={0}
-                      max={30}
-                      value={Math.round((typesettingValue.padding_ratio ?? 0.1) * 100)}
+                      type="text"
+                      inputMode="numeric"
+                      value={paddingInput}
                       disabled={disabled || busy}
-                      onChange={e => {
-                        const val = Number(e.target.value);
-                        if (!isNaN(val)) {
-                          const clamped = Math.max(0, Math.min(30, val));
-                          handlePaddingChange(Number((clamped / 100).toFixed(2)));
+                      onChange={e => setPaddingInput(e.target.value)}
+                      onBlur={() => commitPadding(paddingInput)}
+                      onKeyDown={e => {
+                        if (e.key === "Enter") {
+                          e.currentTarget.blur();
                         }
                       }}
-                      className="w-7 bg-transparent text-right font-mono text-xs font-bold text-accent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none disabled:opacity-50"
+                      className="w-7 bg-transparent text-right font-mono text-xs font-bold text-accent outline-none disabled:opacity-50"
                     />
                     <span className="ml-0.5">%</span>
                   </div>
                   <button
                     type="button"
-                    disabled={disabled || busy || Math.round((typesettingValue.padding_ratio ?? 0.1) * 100) >= 30}
+                    disabled={disabled || busy || currentPaddingPercent >= 30}
                     onClick={() => {
-                      const currentPct = Math.round((typesettingValue.padding_ratio ?? 0.1) * 100);
-                      const nextPct = Math.min(30, currentPct + 1);
+                      const nextPct = Math.min(30, currentPaddingPercent + 1);
+                      setPaddingInput(String(nextPct));
                       handlePaddingChange(Number((nextPct / 100).toFixed(2)));
                     }}
                     className="flex h-7 w-7 items-center justify-center rounded font-mono text-xs font-bold text-muted hover:bg-surface hover:text-main disabled:opacity-30 transition-colors"

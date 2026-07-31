@@ -266,5 +266,12 @@ describe("TranslationEditor", () => {
 
     await user.click(screen.getByRole("button", { name: "Decrease padding" }));
     expect(paddingInput.value).toBe("10");
+
+    // Allows clearing text and typing custom values without instant auto-clamping
+    await user.clear(fontInput);
+    await user.type(fontInput, "15");
+    expect(fontInput.value).toBe("15");
+    fireEvent.blur(fontInput);
+    expect(fontInput.value).toBe("15");
   });
 });
