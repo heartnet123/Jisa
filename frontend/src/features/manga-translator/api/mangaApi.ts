@@ -7,6 +7,10 @@ import type {
   RegionCollectionResponse,
   SystemHealth,
   TranslationConfig,
+  TypesettingSettings,
+  TypesettingOptionsResponse,
+  TypesetPreviewRequest,
+  TypesetPreviewResponse,
 } from "../types";
 
 import { getBYOKHeaders } from "./byok";
@@ -119,11 +123,12 @@ export const mangaApi = {
     const response = await axios.put<RegionCollectionResponse>(
       `${API_BASE_URL}/api/jobs/${id}/regions`,
       {
-        regions: regions.map(({ id: regionId, box, text, translated_text }) => ({
+        regions: regions.map(({ id: regionId, box, text, translated_text, typesetting }) => ({
           id: regionId,
           box,
           text,
           translated_text,
+          typesetting,
         })),
       },
     );
@@ -133,11 +138,34 @@ export const mangaApi = {
   patchRegion: async (
     jobId: string,
     regionId: string,
-    updates: { text?: string | null; translated_text?: string | null },
+    updates: {
+      text?: string | null;
+      translated_text?: string | null;
+      typesetting?: TypesettingSettings | null;
+    },
   ): Promise<BlockItem> => {
     const response = await axios.patch<BlockItem>(
       `${API_BASE_URL}/api/jobs/${jobId}/regions/${regionId}`,
       updates,
+    );
+    return response.data;
+  },
+
+  getTypesettingOptions: async (): Promise<TypesettingOptionsResponse> => {
+    const response = await axios.get<TypesettingOptionsResponse>(
+      `${API_BASE_URL}/api/typesetting/options`,
+    );
+    return response.data;
+  },
+
+  generateTypesetPreview: async (
+    jobId: string,
+    regionId: string,
+    request: TypesetPreviewRequest,
+  ): Promise<TypesetPreviewResponse> => {
+    const response = await axios.post<TypesetPreviewResponse>(
+      `${API_BASE_URL}/api/jobs/${jobId}/regions/${regionId}/typeset-preview`,
+      request,
     );
     return response.data;
   },

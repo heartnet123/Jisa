@@ -1,7 +1,13 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Icon } from '@iconify-icon/react';
 import { AnimatePresence } from 'framer-motion';
-import type { BlockItem, ProcessedManga } from '../types';
+import type {
+  BlockItem,
+  ProcessedManga,
+  TypesettingOptionsResponse,
+  TypesettingSettings,
+  TypesetPreviewBounds,
+} from '../types';
 import { mangaApi } from '../api/mangaApi';
 import { RegionCanvas, type MaskPreviewState } from './RegionCanvas';
 import { RegionInspectorCard } from './RegionInspectorCard';
@@ -14,6 +20,14 @@ interface TranslationEditorProps {
 
 type RegionAction = 'save' | 'ocr' | 'delete';
 
+const defaultTypesetting = (ts?: TypesettingSettings): TypesettingSettings => ({
+  font_name: ts?.font_name ?? null,
+  font_size: ts?.font_size ?? null,
+  auto_fit: ts?.auto_fit ?? true,
+  text_align: ts?.text_align ?? 'center',
+  padding_ratio: ts?.padding_ratio ?? 0.10,
+});
+
 function initialTextMap(
   blocks: BlockItem[] | undefined,
   field: 'text' | 'translated_text',
@@ -23,9 +37,18 @@ function initialTextMap(
   );
 }
 
-function withoutId(values: Set<string>, id: string): Set<string> {
+function initialTypesettingMap(
+  blocks: BlockItem[] | undefined,
+): Record<string, TypesettingSettings> {
+  return Object.fromEntries(
+    (blocks ?? []).map(block => [block.id, defaultTypesetting(block.typesetting)]),
+  );
+}
+
+function withoutId(values: Set<string>, ids: string | string[]): Set<string> {
   const next = new Set(values);
-  next.delete(id);
+  const toDelete = Array.isArray(ids) ? ids : [ids];
+  toDelete.forEach(id => next.delete(id));
   return next;
 }
 
@@ -43,10 +66,30 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
   const [editedTranslations, setEditedTranslations] = useState<Record<string, string>>(
     () => initialTextMap(item.blocks, 'translated_text'),
   );
+  const [editedTypesetting, setEditedTypesetting] = useState<Record<string, TypesettingSettings>>(
+    () => initialTypesettingMap(item.blocks),
+  );
   const [dirtySourceIds, setDirtySourceIds] = useState<Set<string>>(() => new Set());
   const [dirtyTranslationIds, setDirtyTranslationIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [dirtyTypesettingIds, setDirtyTypesettingIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [typesettingOptions, setTypesettingOptions] = useState<TypesettingOptionsResponse | null>(null);
+  const [previewCache, setPreviewCache] = useState<Record<string, {
+    base64?: string;
+    bounds?: TypesetPreviewBounds;
+    lines?: string[];
+    resolved_font_size?: number;
+    auto_shrunk?: boolean;
+    overflow?: boolean;
+    truncated?: boolean;
+    loading?: boolean;
+    error?: string | null;
+  }>>({});
+  const clientRevisionsRef = useRef<Record<string, number>>({});
+
   const [isSavingRegions, setIsSavingRegions] = useState(false);
   const [activeRegionAction, setActiveRegionAction] = useState<{
     blockId: string;
@@ -63,6 +106,81 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
   );
   const [showMaskPreview, setShowMaskPreview] = useState(Boolean(item.mask_preview_url));
 
+  useEffect(() => {
+    mangaApi.getTypesettingOptions()
+      .then(setTypesettingOptions)
+      .catch(err => console.error('Failed to load typesetting options:', err));
+  }, []);
+
+  const selectedBlock = selectedBlockId ? blocks.find(b => b.id === selectedBlockId) : null;
+  const selectedTranslation = selectedBlockId ? editedTranslations[selectedBlockId] : undefined;
+  const selectedTypesetting = selectedBlockId ? editedTypesetting[selectedBlockId] : undefined;
+
+  useEffect(() => {
+    if (!selectedBlockId || !selectedBlock) return;
+    const blockId = selectedBlockId;
+
+    const rev = (clientRevisionsRef.current[blockId] ?? 0) + 1;
+    clientRevisionsRef.current[blockId] = rev;
+
+    setPreviewCache(prev => ({
+      ...prev,
+      [blockId]: {
+        ...prev[blockId],
+        loading: true,
+        error: null,
+      },
+    }));
+
+    const timer = setTimeout(async () => {
+      try {
+        const res = await mangaApi.generateTypesetPreview(item.id, blockId, {
+          client_revision: rev,
+          translated_text: editedTranslations[blockId] ?? '',
+          typesetting: editedTypesetting[blockId] ?? defaultTypesetting(selectedBlock.typesetting),
+        });
+
+        if (clientRevisionsRef.current[blockId] === res.client_revision) {
+          setPreviewCache(prev => ({
+            ...prev,
+            [blockId]: {
+              base64: res.overlay_base64,
+              bounds: res.bounds_px,
+              lines: res.lines,
+              resolved_font_size: res.resolved_font_size,
+              auto_shrunk: res.auto_shrunk,
+              overflow: res.overflow,
+              truncated: res.truncated,
+              loading: false,
+              error: null,
+            },
+          }));
+        }
+      } catch (err) {
+        if (clientRevisionsRef.current[blockId] === rev) {
+          setPreviewCache(prev => ({
+            ...prev,
+            [blockId]: {
+              ...prev[blockId],
+              loading: false,
+              error: err instanceof Error ? err.message : 'Preview failed',
+            },
+          }));
+        }
+      }
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [
+    selectedBlockId,
+    selectedTranslation,
+    JSON.stringify(selectedTypesetting),
+    selectedBlock?.box.x,
+    selectedBlock?.box.y,
+    selectedBlock?.box.width,
+    selectedBlock?.box.height,
+  ]);
+
   const updateTextMapsForRegions = (regions: BlockItem[]) => {
     setEditedSources(previous =>
       Object.fromEntries(
@@ -74,6 +192,14 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
         regions.map(block => [
           block.id,
           previous[block.id] ?? block.translated_text ?? '',
+        ]),
+      ),
+    );
+    setEditedTypesetting(previous =>
+      Object.fromEntries(
+        regions.map(block => [
+          block.id,
+          previous[block.id] ?? defaultTypesetting(block.typesetting),
         ]),
       ),
     );
@@ -139,10 +265,15 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     setDirtyTranslationIds(previous => new Set(previous).add(blockId));
   };
 
+  const handleTypesettingChange = (blockId: string, settings: TypesettingSettings) => {
+    setEditedTypesetting(previous => ({ ...previous, [blockId]: settings }));
+    setDirtyTypesettingIds(previous => new Set(previous).add(blockId));
+  };
+
   const persistDirtyBlocks = async (onlyIds?: string[]) => {
     const requestedIds = onlyIds
       ? new Set(onlyIds)
-      : new Set([...dirtySourceIds, ...dirtyTranslationIds]);
+      : new Set([...dirtySourceIds, ...dirtyTranslationIds, ...dirtyTypesettingIds]);
     const ids = blocks
       .map(block => block.id)
       .filter(id => requestedIds.has(id));
@@ -153,10 +284,17 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
 
     const updates = await Promise.all(
       ids.map(async blockId => {
-        const patch: { text?: string; translated_text?: string } = {};
+        const patch: {
+          text?: string;
+          translated_text?: string;
+          typesetting?: TypesettingSettings;
+        } = {};
         if (dirtySourceIds.has(blockId)) patch.text = editedSources[blockId] ?? '';
         if (dirtyTranslationIds.has(blockId)) {
           patch.translated_text = editedTranslations[blockId] ?? '';
+        }
+        if (dirtyTypesettingIds.has(blockId)) {
+          patch.typesetting = editedTypesetting[blockId];
         }
         return mangaApi.patchRegion(item.id, blockId, patch);
       }),
@@ -165,25 +303,23 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     const nextBlocks = blocks.map(block => updatedById.get(block.id) ?? block);
     const nextSources = { ...editedSources };
     const nextTranslations = { ...editedTranslations };
+    const nextTypesetting = { ...editedTypesetting };
     for (const updated of updates) {
       nextSources[updated.id] = updated.text ?? '';
       nextTranslations[updated.id] = updated.translated_text ?? '';
+      if (updated.typesetting) {
+        nextTypesetting[updated.id] = defaultTypesetting(updated.typesetting);
+      }
     }
 
     savedBlocksRef.current = nextBlocks;
     setBlocks(nextBlocks);
     setEditedSources(nextSources);
     setEditedTranslations(nextTranslations);
-    setDirtySourceIds(previous => {
-      const next = new Set(previous);
-      ids.forEach(id => next.delete(id));
-      return next;
-    });
-    setDirtyTranslationIds(previous => {
-      const next = new Set(previous);
-      ids.forEach(id => next.delete(id));
-      return next;
-    });
+    setEditedTypesetting(nextTypesetting);
+    setDirtySourceIds(previous => withoutId(previous, ids));
+    setDirtyTranslationIds(previous => withoutId(previous, ids));
+    setDirtyTypesettingIds(previous => withoutId(previous, ids));
     onUpdate(item.id, { blocks: nextBlocks });
     return { blocks: nextBlocks, translations: nextTranslations };
   };
@@ -219,6 +355,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
       }));
       setDirtySourceIds(previous => withoutId(previous, blockId));
       setDirtyTranslationIds(previous => withoutId(previous, blockId));
+      setDirtyTypesettingIds(previous => withoutId(previous, blockId));
       onUpdate(item.id, { blocks: nextBlocks });
     } catch (err) {
       console.error('Failed to rerun OCR:', err);
@@ -245,8 +382,14 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
         delete next[blockId];
         return next;
       });
+      setEditedTypesetting(previous => {
+        const next = { ...previous };
+        delete next[blockId];
+        return next;
+      });
       setDirtySourceIds(previous => withoutId(previous, blockId));
       setDirtyTranslationIds(previous => withoutId(previous, blockId));
+      setDirtyTypesettingIds(previous => withoutId(previous, blockId));
     }
     setActiveRegionAction(null);
   };
@@ -300,7 +443,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     }
   };
 
-  const hasDirtyText = dirtySourceIds.size > 0 || dirtyTranslationIds.size > 0;
+  const hasDirtyText = dirtySourceIds.size > 0 || dirtyTranslationIds.size > 0 || dirtyTypesettingIds.size > 0;
   const controlsDisabled = isSavingRegions || isSubmitting || activeRegionAction !== null;
 
   return (
@@ -378,7 +521,10 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
                   selected={selectedBlockId === block.id}
                   sourceValue={editedSources[block.id] ?? ''}
                   translationValue={editedTranslations[block.id] ?? ''}
-                  dirty={dirtySourceIds.has(block.id) || dirtyTranslationIds.has(block.id)}
+                  typesettingValue={editedTypesetting[block.id] ?? defaultTypesetting(block.typesetting)}
+                  typesettingOptions={typesettingOptions}
+                  previewStatus={previewCache[block.id]}
+                  dirty={dirtySourceIds.has(block.id) || dirtyTranslationIds.has(block.id) || dirtyTypesettingIds.has(block.id)}
                   action={
                     activeRegionAction?.blockId === block.id
                       ? activeRegionAction.action
@@ -391,6 +537,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
                   onSelect={handleSelect}
                   onSourceChange={handleSourceChange}
                   onTranslationChange={handleTranslationChange}
+                  onTypesettingChange={handleTypesettingChange}
                 />
               ))}
             </AnimatePresence>

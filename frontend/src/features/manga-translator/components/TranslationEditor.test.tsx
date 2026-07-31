@@ -13,6 +13,8 @@ vi.mock("../api/mangaApi", () => ({
     rerunRegionOcr: vi.fn(),
     generateMaskPreview: vi.fn(),
     approveTranslation: vi.fn(),
+    getTypesettingOptions: vi.fn(),
+    generateTypesetPreview: vi.fn(),
   },
 }));
 
@@ -97,6 +99,24 @@ async function selectRegion(user: ReturnType<typeof userEvent.setup>) {
 
 describe("TranslationEditor", () => {
   beforeEach(() => {
+    api.getTypesettingOptions.mockResolvedValue({
+      fonts: [{ name: "Itim-Regular.ttf", label: "Itim (Regular)" }],
+      default_font_name: "Itim-Regular.ttf",
+      font_size: { min: 8, max: 72 },
+      padding_ratio: { min: 0.0, max: 0.30, step: 0.01, default: 0.10 },
+      alignments: ["left", "center", "right"],
+    });
+    api.generateTypesetPreview.mockImplementation(async (_jobId, _regionId, req) => ({
+      client_revision: req.client_revision,
+      mime_type: "image/png",
+      overlay_base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+      bounds_px: { x: 100, y: 320, width: 300, height: 160 },
+      lines: ["Line 1"],
+      resolved_font_size: 20,
+      auto_shrunk: false,
+      overflow: false,
+      truncated: false,
+    }));
     api.replaceRegions.mockImplementation(async (_jobId, regions) => ({
       region_mode: "manual_override",
       regions,
