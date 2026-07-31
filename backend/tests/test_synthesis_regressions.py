@@ -47,6 +47,68 @@ class TypesettingRegressionTests(unittest.TestCase):
         self.assertEqual(len(clipped), 2)
         self.assertTrue(clipped[-1] == "" or clipped[-1].endswith("…"))
 
+    def test_list_available_fonts_and_resolution(self) -> None:
+        engine = TypesettingEngine()
+        fonts = engine.list_available_fonts()
+        self.assertTrue(any(f["name"] == "Itim-Regular.ttf" for f in fonts))
+
+        path = engine.resolve_font_path("Itim-Regular.ttf")
+        self.assertTrue(path.endswith("Itim-Regular.ttf"))
+
+        with self.assertRaises(ValueError):
+            engine.resolve_font_path("../secret.ttf")
+
+        with self.assertRaises(ValueError):
+            engine.resolve_font_path("NonExistentFont.ttf")
+
+    def test_compute_layout_auto_fit_and_alignment(self) -> None:
+        engine = TypesettingEngine()
+        layout = engine.compute_layout(
+            text="สวัสดี\nโลก",
+            target_w=100,
+            target_h=100,
+            target_box=(10, 10, 110, 110),
+            text_align="left",
+            font_size=24,
+            auto_fit=True,
+        )
+        self.assertEqual(layout.lines, ["สวัสดี", "โลก"])
+        self.assertEqual(layout.text_align, "left")
+        self.assertFalse(layout.overflow)
+
+    def test_compute_layout_overflow_and_truncation_when_disabled(self) -> None:
+        engine = TypesettingEngine()
+        long_text = "ข้อความยาวมาก ๆ " * 10
+        layout = engine.compute_layout(
+            text=long_text,
+            target_w=30,
+            target_h=20,
+            target_box=(0, 0, 30, 20),
+            font_size=40,
+            auto_fit=False,
+        )
+        self.assertTrue(layout.overflow)
+
+    def test_preview_crop_and_render_parity(self) -> None:
+        from synthesis.typesetting import TypesetBlock
+        engine = TypesettingEngine()
+        base_img = np.full((200, 200, 3), 255, dtype=np.uint8)
+        block = TypesetBlock(
+            id="b1",
+            box=(20, 20, 160, 160),
+            text="ข้อความทดสอบ พรีวิว",
+            font_name="Itim-Regular.ttf",
+            font_size=20,
+            auto_fit=True,
+            text_align="center",
+        )
+
+        crop_img, bounds_px, layout = engine.render_block_preview_crop(block, base_img.shape[:2])
+        self.assertIsNotNone(crop_img)
+        self.assertEqual(bounds_px[2], crop_img.width)
+        self.assertEqual(bounds_px[3], crop_img.height)
+        self.assertFalse(layout.overflow)
+
 
 class InpaintingRegressionTests(unittest.TestCase):
     def test_extract_text_mask_detects_dark_glyphs_inside_bubble(self) -> None:
