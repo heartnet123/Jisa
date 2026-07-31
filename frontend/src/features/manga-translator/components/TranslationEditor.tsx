@@ -475,6 +475,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
             imageUrl={item.originalUrl}
             blocks={blocks}
             selectedBlockId={selectedBlockId}
+            previewOverlays={previewCache}
             disabled={controlsDisabled}
             maskPreviewUrl={maskPreviewUrl}
             maskPreviewState={maskPreviewState}
