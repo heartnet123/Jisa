@@ -200,6 +200,7 @@ class SQLiteReviewRepositoryTests(unittest.TestCase):
             regions = repo.load_regions("job-1")
             self.assertEqual(len(regions), 1)
             reg = regions[0]
+            self.assertEqual(reg.translated_text, "ข้อความดั้งเดิม")
             self.assertIsNone(reg.font_name)
             self.assertIsNone(reg.font_size)
             self.assertTrue(reg.auto_fit)

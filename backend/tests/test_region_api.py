@@ -307,10 +307,6 @@ class RegionApiTests(unittest.TestCase):
         self.assertEqual(data["alignments"], ["left", "center", "right"])
 
     def test_typesetting_preview_endpoint(self) -> None:
-        cv2.imwrite(
-            str(main.UPLOAD_DIR / "page.png"),
-            np.full((1600, 1000, 3), 255, dtype=np.uint8),
-        )
         response = self.client.post(
             "/api/jobs/job-1/regions/region-1/typeset-preview",
             json={
@@ -334,10 +330,6 @@ class RegionApiTests(unittest.TestCase):
         self.assertFalse(data["overflow"])
 
     def test_typesetting_preview_invalid_font_returns_422(self) -> None:
-        cv2.imwrite(
-            str(main.UPLOAD_DIR / "page.png"),
-            np.full((1600, 1000, 3), 255, dtype=np.uint8),
-        )
         response = self.client.post(
             "/api/jobs/job-1/regions/region-1/typeset-preview",
             json={
@@ -348,7 +340,7 @@ class RegionApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 422)
 
-    def test_replace_and_patch_job_regions_preserves_typesetting(self) -> None:
+    def test_patch_job_regions_preserves_and_persists_typesetting(self) -> None:
         with patch.object(main, "notify_state_change", new=AsyncMock()):
             patch_resp = self.client.patch(
                 "/api/jobs/job-1/regions/region-1",
@@ -369,6 +361,80 @@ class RegionApiTests(unittest.TestCase):
         self.assertFalse(patched_data["typesetting"]["auto_fit"])
         self.assertEqual(patched_data["typesetting"]["text_align"], "right")
         self.assertAlmostEqual(patched_data["typesetting"]["padding_ratio"], 0.15)
+
+        # Verify durable persistence via repository reload
+        reloaded_regions = self.repository.load_regions("job-1")
+        reloaded = next(r for r in reloaded_regions if r.id == "region-1")
+        self.assertEqual(reloaded.font_name, "Itim-Regular.ttf")
+        self.assertEqual(reloaded.font_size, 28)
+        self.assertFalse(reloaded.auto_fit)
+        self.assertEqual(reloaded.text_align, "right")
+        self.assertAlmostEqual(reloaded.padding_ratio, 0.15)
+
+    def test_replace_job_regions_preserves_typesetting(self) -> None:
+        # First set custom typesetting on region-1
+        with patch.object(main, "notify_state_change", new=AsyncMock()):
+            self.client.patch(
+                "/api/jobs/job-1/regions/region-1",
+                json={
+                    "typesetting": {
+                        "font_name": "Itim-Regular.ttf",
+                        "font_size": 32,
+                        "auto_fit": False,
+                        "text_align": "left",
+                        "padding_ratio": 0.20,
+                    }
+                },
+            )
+
+            # PUT replacement omitting typesetting should retain previous typesetting
+            put_resp = self.client.put(
+                "/api/jobs/job-1/regions",
+                json={
+                    "regions": [
+                        {
+                            "id": "region-1",
+                            "box": {"x": 0.1, "y": 0.2, "width": 0.3, "height": 0.4},
+                            "text": "Japanese text",
+                            "translated_text": "Thai text",
+                        }
+                    ]
+                },
+            )
+        self.assertEqual(put_resp.status_code, 200)
+        put_data = put_resp.json()
+        self.assertEqual(put_data["regions"][0]["typesetting"]["font_name"], "Itim-Regular.ttf")
+        self.assertEqual(put_data["regions"][0]["typesetting"]["font_size"], 32)
+        self.assertFalse(put_data["regions"][0]["typesetting"]["auto_fit"])
+        self.assertEqual(put_data["regions"][0]["typesetting"]["text_align"], "left")
+        self.assertAlmostEqual(put_data["regions"][0]["typesetting"]["padding_ratio"], 0.20)
+
+    def test_mutation_invalid_font_returns_422(self) -> None:
+        patch_resp = self.client.patch(
+            "/api/jobs/job-1/regions/region-1",
+            json={
+                "typesetting": {
+                    "font_name": "NonExistentFont.ttf",
+                }
+            },
+        )
+        self.assertEqual(patch_resp.status_code, 422)
+
+        put_resp = self.client.put(
+            "/api/jobs/job-1/regions",
+            json={
+                "regions": [
+                    {
+                        "id": "region-1",
+                        "box": {"x": 0.1, "y": 0.2, "width": 0.3, "height": 0.4},
+                        "typesetting": {
+                            "font_name": "../secret.ttf",
+                        },
+                    }
+                ]
+            },
+        )
+        self.assertEqual(put_resp.status_code, 422)
 
 
 if __name__ == "__main__":

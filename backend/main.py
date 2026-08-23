@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from job_errors import OcrError, ocr_failure_message
 from repository import RegionRecord, ReviewRepository, SQLiteReviewRepository
@@ -277,6 +277,54 @@ def _persist_runtime_regions(job_id: str, blocks: List[TextBlock]) -> None:
     job["blocks"] = _public_regions(job_id)
 
 
+def _region_mask(
+    region: RegionRecord,
+    image_width: int,
+    image_height: int,
+    box_px: tuple[int, int, int, int],
+) -> np.ndarray:
+    mask = None
+    if region.source == "detected" and region.mask_path:
+        loaded = cv2.imread(region.mask_path, cv2.IMREAD_GRAYSCALE)
+        if loaded is not None and loaded.shape == (image_height, image_width):
+            mask = (loaded > 0).astype(np.uint8)
+    if mask is None:
+        mask = np.zeros((image_height, image_width), dtype=np.uint8)
+        x, y, width, height = box_px
+        mask[y : y + height, x : x + width] = 1
+    return mask
+
+
+def _durable_regions_to_engine_blocks(
+    job: dict, regions: list[RegionRecord] | None = None
+) -> list[TextBlock]:
+    image_width = int(job.get("image_width") or 0)
+    image_height = int(job.get("image_height") or 0)
+    if image_width <= 0 or image_height <= 0:
+        return []
+
+    durable_regions = regions if regions is not None else repository.load_regions(job["id"])
+    blocks: list[TextBlock] = []
+    for region in durable_regions:
+        box = normalized_box_to_pixels(
+            (region.x, region.y, region.width, region.height),
+            image_width,
+            image_height,
+        )
+        mask = _region_mask(region, image_width, image_height, box)
+
+        blocks.append(
+            TextBlock(
+                id=region.id,
+                box=box,
+                text=region.source_text,
+                translated_text=region.translated_text,
+                mask=mask,
+            )
+        )
+    return blocks
+
+
 def _public_region(region: RegionRecord) -> dict:
     return {
         "id": region.id,
@@ -429,6 +477,13 @@ class TypesettingSettings(BaseModel):
     auto_fit: bool = True
     text_align: Literal["left", "center", "right"] = "center"
     padding_ratio: float = Field(default=0.10, ge=0.0, le=0.30)
+
+    @field_validator("font_name")
+    @classmethod
+    def validate_font_name(cls, v: str | None) -> str | None:
+        if v is not None:
+            typesetter.resolve_font_path(v)
+        return v
 
 
 class BlockItem(BaseModel):
@@ -1495,7 +1550,7 @@ async def get_typesetting_options() -> TypesettingOptionsResponse:
     "/api/jobs/{job_id}/regions/{region_id}/typeset-preview",
     response_model=TypesetPreviewResponse,
 )
-async def generate_region_typeset_preview(
+def generate_region_typeset_preview(
     job_id: str, region_id: str, payload: TypesetPreviewRequest
 ) -> TypesetPreviewResponse:
     job = _require_review_job(job_id)
@@ -1524,16 +1579,7 @@ async def generate_region_typeset_preview(
         image_height,
     )
 
-    mask = None
-    if region.source == "detected" and region.mask_path:
-        loaded = cv2.imread(region.mask_path, cv2.IMREAD_GRAYSCALE)
-        if loaded is not None and loaded.shape == (image_height, image_width):
-            mask = (loaded > 0).astype(np.uint8)
-
-    if mask is None:
-        mask = np.zeros((image_height, image_width), dtype=np.uint8)
-        x, y, w, h = box_px
-        mask[y : y + h, x : x + w] = 1
+    mask = _region_mask(region, image_width, image_height, box_px)
 
     block = TypesetBlock(
         id=region_id,
