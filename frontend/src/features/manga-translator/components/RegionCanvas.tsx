@@ -50,10 +50,19 @@ interface PendingUpdate {
   box: NormalizedBox;
 }
 
+export interface TypesetPreviewOverlayItem {
+  base64?: string;
+  mimeType?: string;
+  bounds?: { x: number; y: number; width: number; height: number };
+  loading?: boolean;
+  error?: string | null;
+}
+
 interface RegionCanvasProps {
   imageUrl: string;
   blocks: BlockItem[];
   selectedBlockId: string | null;
+  previewOverlays?: Record<string, TypesetPreviewOverlayItem>;
   disabled?: boolean;
   maskPreviewUrl?: string;
   maskPreviewState?: MaskPreviewState;
@@ -221,6 +230,7 @@ export function RegionCanvas({
   imageUrl,
   blocks,
   selectedBlockId,
+  previewOverlays,
   disabled = false,
   maskPreviewUrl,
   maskPreviewState = "idle",
@@ -232,11 +242,16 @@ export function RegionCanvas({
 }: RegionCanvasProps) {
   const [addMode, setAddMode] = useState(false);
   const [draftBox, setDraftBox] = useState<NormalizedBox | null>(null);
+  const [imageDimensions, setImageDimensions] = useState<{ width: number; height: number } | null>(null);
   const blocksRef = useRef(blocks);
   const interactionRef = useRef<Interaction | null>(null);
   const pendingRef = useRef<PendingUpdate | null>(null);
   const frameRef = useRef<number | null>(null);
   const draftRef = useRef<NormalizedBox | null>(null);
+
+  useEffect(() => {
+    setImageDimensions(null);
+  }, [imageUrl]);
 
   useEffect(() => {
     blocksRef.current = blocks;
@@ -473,6 +488,12 @@ export function RegionCanvas({
             src={imageUrl}
             alt="Manga page being reviewed"
             draggable={false}
+            onLoad={e => {
+              const img = e.currentTarget;
+              if (img.naturalWidth && img.naturalHeight) {
+                setImageDimensions({ width: img.naturalWidth, height: img.naturalHeight });
+              }
+            }}
             className="block max-h-[calc(100dvh-13rem)] max-w-full select-none object-contain lg:max-h-[calc(100dvh-9rem)]"
           />
           {showMaskPreview && maskPreviewUrl ? (
@@ -496,6 +517,28 @@ export function RegionCanvas({
             onPointerUp={finishInteraction}
             onPointerCancel={cancelInteraction}
           >
+            {blocks.map(block => {
+              const overlay = previewOverlays?.[block.id];
+              if (!overlay?.base64 || !overlay.bounds || !imageDimensions) return null;
+              const { bounds, base64, mimeType } = overlay;
+              const x = (bounds.x / imageDimensions.width) * 100;
+              const y = (bounds.y / imageDimensions.height) * 100;
+              const width = (bounds.width / imageDimensions.width) * 100;
+              const height = (bounds.height / imageDimensions.height) * 100;
+
+              return (
+                <image
+                  key={`preview-crop-${block.id}`}
+                  href={`data:${mimeType || "image/png"};base64,${base64}`}
+                  x={x}
+                  y={y}
+                  width={width}
+                  height={height}
+                  preserveAspectRatio="none"
+                  className="pointer-events-none opacity-90 transition-opacity"
+                />
+              );
+            })}
             {blocks.map((block, index) => (
               <RegionShape
                 key={block.id}

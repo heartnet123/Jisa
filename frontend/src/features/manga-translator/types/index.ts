@@ -19,6 +19,16 @@ export interface NormalizedBox {
   height: number;
 }
 
+export type TextAlign = "left" | "center" | "right";
+
+export interface TypesettingSettings {
+  font_name?: string | null;
+  font_size?: number | null;
+  auto_fit: boolean;
+  text_align: TextAlign;
+  padding_ratio: number;
+}
+
 export interface BlockItem {
   id: string;
   box: NormalizedBox;
@@ -26,6 +36,58 @@ export interface BlockItem {
   text?: string;
   translated_text?: string;
   mask_available?: boolean;
+  typesetting?: TypesettingSettings;
+}
+
+export interface TypesettingFontItem {
+  name: string;
+  label: string;
+}
+
+export interface IntRange {
+  min: number;
+  max: number;
+}
+
+export interface FloatRange {
+  min: number;
+  max: number;
+  step: number;
+  default: number;
+}
+
+export interface TypesettingOptionsResponse {
+  fonts: TypesettingFontItem[];
+  default_font_name?: string | null;
+  font_size: IntRange;
+  padding_ratio: FloatRange;
+  alignments: TextAlign[];
+}
+
+export interface TypesetPreviewRequest {
+  client_revision: number;
+  translated_text?: string;
+  typesetting: TypesettingSettings;
+}
+
+export interface TypesetPreviewBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface TypesetPreviewResponse {
+  client_revision: number;
+  mime_type: string;
+  overlay_base64: string;
+  bounds_px: TypesetPreviewBounds;
+  lines: string[];
+  requested_font_size?: number | null;
+  resolved_font_size: number;
+  auto_shrunk: boolean;
+  overflow: boolean;
+  truncated: boolean;
 }
 
 export interface RegionCollectionResponse {

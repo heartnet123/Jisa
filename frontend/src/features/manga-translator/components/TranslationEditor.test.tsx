@@ -13,6 +13,8 @@ vi.mock("../api/mangaApi", () => ({
     rerunRegionOcr: vi.fn(),
     generateMaskPreview: vi.fn(),
     approveTranslation: vi.fn(),
+    getTypesettingOptions: vi.fn(),
+    generateTypesetPreview: vi.fn(),
   },
 }));
 
@@ -97,6 +99,24 @@ async function selectRegion(user: ReturnType<typeof userEvent.setup>) {
 
 describe("TranslationEditor", () => {
   beforeEach(() => {
+    api.getTypesettingOptions.mockResolvedValue({
+      fonts: [{ name: "Itim-Regular.ttf", label: "Itim (Regular)" }],
+      default_font_name: "Itim-Regular.ttf",
+      font_size: { min: 8, max: 72 },
+      padding_ratio: { min: 0.0, max: 0.30, step: 0.01, default: 0.10 },
+      alignments: ["left", "center", "right"],
+    });
+    api.generateTypesetPreview.mockImplementation(async (_jobId, _regionId, req) => ({
+      client_revision: req.client_revision,
+      mime_type: "image/png",
+      overlay_base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+      bounds_px: { x: 100, y: 320, width: 300, height: 160 },
+      lines: ["Line 1"],
+      resolved_font_size: 20,
+      auto_shrunk: false,
+      overflow: false,
+      truncated: false,
+    }));
     api.replaceRegions.mockImplementation(async (_jobId, regions) => ({
       region_mode: "manual_override",
       regions,
@@ -222,5 +242,111 @@ describe("TranslationEditor", () => {
       expect.objectContaining({ status: "inpainting", progress: 60 }),
     );
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("adjusts font size and padding using stepper controls", async () => {
+    const user = userEvent.setup();
+    renderEditor();
+    await selectRegion(user);
+
+    const fontInput = screen.getByLabelText("Max Size") as HTMLInputElement;
+    expect(fontInput.value).toBe("20");
+
+    await user.click(screen.getByRole("button", { name: "Increase font size" }));
+    expect(fontInput.value).toBe("21");
+
+    await user.click(screen.getByRole("button", { name: "Decrease font size" }));
+    expect(fontInput.value).toBe("20");
+
+    const paddingInput = screen.getByLabelText("Padding") as HTMLInputElement;
+    expect(paddingInput.value).toBe("10");
+
+    await user.click(screen.getByRole("button", { name: "Increase padding" }));
+    expect(paddingInput.value).toBe("11");
+
+    await user.click(screen.getByRole("button", { name: "Decrease padding" }));
+    expect(paddingInput.value).toBe("10");
+
+    // Allows clearing text and typing custom values without instant auto-clamping
+    await user.clear(fontInput);
+    await user.type(fontInput, "15");
+    expect(fontInput.value).toBe("15");
+    fireEvent.blur(fontInput);
+    expect(fontInput.value).toBe("15");
+
+    // Clamps values below minimum (min is 8) on blur
+    await user.clear(fontInput);
+    await user.type(fontInput, "2");
+    expect(fontInput.value).toBe("2");
+    fireEvent.blur(fontInput);
+    expect(fontInput.value).toBe("8");
+
+    // Clamps values above maximum (max is 72) on blur
+    await user.clear(fontInput);
+    await user.type(fontInput, "100");
+    expect(fontInput.value).toBe("100");
+    fireEvent.blur(fontInput);
+    expect(fontInput.value).toBe("72");
+  });
+
+  it("syncs Auto-fit with max size and unchecks Auto-fit when font size is manually changed", async () => {
+    const user = userEvent.setup();
+    api.generateTypesetPreview.mockImplementation(async (_jobId, _regionId, req) => ({
+      client_revision: req.client_revision,
+      mime_type: "image/png",
+      overlay_base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+      bounds_px: { x: 100, y: 320, width: 300, height: 160 },
+      lines: ["Line 1"],
+      resolved_font_size: req.typesetting.auto_fit ? 14 : req.typesetting.font_size ?? 20,
+      auto_shrunk: false,
+      overflow: false,
+      truncated: false,
+    }));
+    renderEditor();
+    await selectRegion(user);
+
+    const autoFitCheckbox = screen.getByRole("checkbox", { name: "Auto-fit" }) as HTMLInputElement;
+    expect(autoFitCheckbox.checked).toBe(true);
+
+    const fontInput = screen.getByLabelText("Max Size") as HTMLInputElement;
+    await waitFor(() => expect(fontInput.value).toBe("14"));
+    await waitFor(() =>
+      expect(api.generateTypesetPreview).toHaveBeenLastCalledWith(
+        "job-1",
+        "region-1",
+        expect.objectContaining({
+          typesetting: expect.objectContaining({ auto_fit: true }),
+        }),
+      ),
+    );
+
+    // Disabling Auto-fit keeps the resolved size as the manual font size.
+    await user.click(autoFitCheckbox);
+    expect(autoFitCheckbox.checked).toBe(false);
+    expect(screen.getByLabelText("Font Size")).toHaveValue("14");
+
+    // Re-checking Auto-fit keeps the synced max size.
+    await user.click(autoFitCheckbox);
+    expect(autoFitCheckbox.checked).toBe(true);
+    await waitFor(() => expect(screen.getByLabelText("Max Size")).toHaveValue("14"));
+
+    // Manually changing font size unchecks Auto-fit and uses the displayed value as its baseline.
+    await user.click(screen.getByRole("button", { name: "Increase font size" }));
+    expect(autoFitCheckbox.checked).toBe(false);
+    expect(screen.getByLabelText("Font Size")).toHaveValue("15");
+  });
+
+  it("keeps Auto-fit checked when the max size is blurred without a value change", async () => {
+    const user = userEvent.setup();
+    renderEditor();
+    await selectRegion(user);
+
+    const autoFitCheckbox = screen.getByRole("checkbox", { name: "Auto-fit" }) as HTMLInputElement;
+    const fontInput = screen.getByLabelText("Max Size") as HTMLInputElement;
+    await waitFor(() => expect(fontInput.value).toBe("20"));
+
+    fireEvent.blur(fontInput);
+    expect(autoFitCheckbox.checked).toBe(true);
+    expect(screen.getByLabelText("Max Size")).toBeInTheDocument();
   });
 });

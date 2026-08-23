@@ -16,9 +16,30 @@ class TypesetBlock(BaseModel):
     id: str
     box: Tuple[int, int, int, int]  # x, y, w, h
     text: str
+    font_name: str | None = None
     font_size: int | None = None
+    auto_fit: bool = True
+    text_align: str = "center"  # left, center, right
+    padding_ratio: float = 0.10
     color: str = "black"
     mask: np.ndarray | None = None  # HxW binary mask of the bubble region
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+
+class TypesetLayout(BaseModel):
+    lines: List[str]
+    font_path: str
+    font_size: int
+    requested_font_size: int | None = None
+    line_height: int
+    total_height: int
+    target_box: Tuple[int, int, int, int]  # target_x1, target_y1, target_x2, target_y2
+    text_align: str = "center"
+    color: str = "black"
+    auto_shrunk: bool = False
+    overflow: bool = False
+    truncated: bool = False
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -63,9 +84,377 @@ class TypesettingEngine:
         self.line_gap_ratio = 0.18
         self._thai_word_tokenize = self._load_thai_tokenizer()
 
+    @property
+    def fonts_dir(self) -> Path:
+        base_dir = Path(__file__).resolve().parent.parent
+        return base_dir / "assets" / "fonts"
+
+    def list_available_fonts(self) -> List[dict[str, str]]:
+        fonts: List[dict[str, str]] = []
+        if self.fonts_dir.exists():
+            for font_file in sorted(self.fonts_dir.glob("*.[tT][tT][fF]")):
+                name = font_file.name
+                label = name.rsplit(".", 1)[0].replace("-", " ").replace("_", " ")
+                fonts.append({"name": name, "label": label})
+        return fonts
+
+    def resolve_font_path(self, font_name: str | None = None) -> str:
+        if font_name is not None:
+            safe_name = Path(font_name).name
+            if safe_name != font_name or "/" in font_name or "\\" in font_name:
+                raise ValueError(f"Invalid font name: '{font_name}'")
+            candidate = self.fonts_dir / safe_name
+            if not candidate.exists():
+                raise ValueError(f"Requested font '{font_name}' does not exist.")
+            return str(candidate)
+
+        if self.font_path:
+            return self.font_path
+        raise ValueError("No font available in system.")
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def compute_layout(
+        self,
+        text: str,
+        target_w: int,
+        target_h: int,
+        target_box: Tuple[int, int, int, int],
+        font_name: str | None = None,
+        font_size: int | None = None,
+        auto_fit: bool = True,
+        text_align: str = "center",
+        color: str = "black",
+    ) -> TypesetLayout:
+        normalized = self._normalize_text(text)
+        font_path = self.resolve_font_path(font_name)
+
+        if not normalized.strip() or target_w <= 0 or target_h <= 0:
+            return TypesetLayout(
+                lines=[],
+                font_path=font_path,
+                font_size=font_size or self.default_font_size,
+                requested_font_size=font_size,
+                line_height=self._line_height(self._load_font(self.default_font_size, font_path)),
+                total_height=0,
+                target_box=target_box,
+                text_align=text_align,
+                color=color,
+                auto_shrunk=False,
+                overflow=False,
+                truncated=False,
+            )
+
+        if auto_fit:
+            start = (
+                min(self.max_font_size, max(self.min_font_size, font_size))
+                if font_size is not None
+                else self.max_font_size
+            )
+            stop = self.min_font_size
+
+            best_layout: TypesetLayout | None = None
+            best_overflow_score = float("inf")
+
+            for size in range(start, stop - 1, -1):
+                font = self._load_font(size, font_path)
+                force_b = size == stop
+                wrap_strategies: list[
+                    Callable[[str, ImageFont.FreeTypeFont | ImageFont.ImageFont, int], List[str]]
+                ] = [
+                    lambda t, f, w, fb=force_b: self._wrap_text(t, f, w, force_break=fb),
+                    lambda t, f, w, fb=force_b: self._wrap_text_compact(t, f, w, force_break=fb),
+                ]
+
+                for wrap_strategy in wrap_strategies:
+                    lines = wrap_strategy(normalized, font, target_w)
+                    if not lines:
+                        continue
+
+                    if any(self._line_width(font, line) > target_w for line in lines):
+                        continue
+
+                    line_height = self._line_height(font)
+                    total_height = line_height * len(lines)
+                    overflow_score = max(0, total_height - target_h)
+
+                    if total_height <= target_h:
+                        auto_shrunk = (font_size is not None and size < font_size) or (
+                            font_size is None and size < self.default_font_size
+                        )
+                        return TypesetLayout(
+                            lines=lines,
+                            font_path=font_path,
+                            font_size=size,
+                            requested_font_size=font_size,
+                            line_height=line_height,
+                            total_height=total_height,
+                            target_box=target_box,
+                            text_align=text_align,
+                            color=color,
+                            auto_shrunk=auto_shrunk,
+                            overflow=False,
+                            truncated=False,
+                        )
+
+                    if overflow_score < best_overflow_score:
+                        best_overflow_score = overflow_score
+                        best_layout = TypesetLayout(
+                            lines=lines,
+                            font_path=font_path,
+                            font_size=size,
+                            requested_font_size=font_size,
+                            line_height=line_height,
+                            total_height=total_height,
+                            target_box=target_box,
+                            text_align=text_align,
+                            color=color,
+                            auto_shrunk=True,
+                            overflow=True,
+                            truncated=False,
+                        )
+
+            if best_layout is not None:
+                return best_layout
+
+            # Reached min size without fitting vertically
+            font = self._load_font(self.min_font_size, font_path)
+            lines = self._wrap_text(normalized, font, target_w, force_break=True)
+            line_height = self._line_height(font)
+            clipped_lines = self._clip_lines_to_height(
+                lines, font, line_height, target_w, target_h
+            )
+            truncated = (len(clipped_lines) < len(lines)) or any(
+                c != o for c, o in zip(clipped_lines, lines, strict=False)
+            )
+            return TypesetLayout(
+                lines=clipped_lines,
+                font_path=font_path,
+                font_size=self.min_font_size,
+                requested_font_size=font_size,
+                line_height=line_height,
+                total_height=min(target_h, line_height * len(clipped_lines)),
+                target_box=target_box,
+                text_align=text_align,
+                color=color,
+                auto_shrunk=True,
+                overflow=True,
+                truncated=truncated,
+            )
+        else:
+            size = (
+                min(self.max_font_size, max(self.min_font_size, font_size))
+                if font_size is not None
+                else self.default_font_size
+            )
+            font = self._load_font(size, font_path)
+            lines = self._wrap_text(normalized, font, target_w, force_break=True)
+            line_height = self._line_height(font)
+            total_height = line_height * len(lines)
+            overflow = (total_height > target_h) or any(
+                self._line_width(font, line) > target_w for line in lines
+            )
+            clipped_lines = self._clip_lines_to_height(
+                lines, font, line_height, target_w, target_h
+            )
+            truncated = (len(clipped_lines) < len(lines)) or any(
+                c != o for c, o in zip(clipped_lines, lines, strict=False)
+            )
+            return TypesetLayout(
+                lines=clipped_lines,
+                font_path=font_path,
+                font_size=size,
+                requested_font_size=font_size,
+                line_height=line_height,
+                total_height=min(target_h, total_height),
+                target_box=target_box,
+                text_align=text_align,
+                color=color,
+                auto_shrunk=False,
+                overflow=overflow,
+                truncated=truncated,
+            )
+
+    def draw_layout_overlay(
+        self,
+        layout: TypesetLayout,
+        canvas_shape: tuple[int, int],
+        clip_mask: np.ndarray | None = None,
+    ) -> Image.Image:
+        """
+        Draw lines of text onto a transparent RGBA image matching canvas_shape (H, W).
+        If clip_mask is provided (H, W uint8 binary mask), text is masked to that region.
+        """
+        h, w = canvas_shape
+        overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay)
+
+        if not layout.lines:
+            return overlay
+
+        font = self._load_font(layout.font_size, layout.font_path)
+        tx1, ty1, tx2, ty2 = layout.target_box
+        box_w = max(1, tx2 - tx1)
+        box_h = max(1, ty2 - ty1)
+
+        # Vertical center within the target box
+        start_y = ty1 + max(0, (box_h - layout.total_height) // 2)
+
+        current_y = start_y
+        for line in layout.lines:
+            line_w = self._line_width(font, line)
+            if layout.text_align == "left":
+                draw_x = tx1
+                anchor = "la"
+                align = "left"
+            elif layout.text_align == "right":
+                draw_x = tx2
+                anchor = "ra"
+                align = "right"
+            else:
+                draw_x = tx1 + (box_w // 2)
+                anchor = "ma"
+                align = "center"
+
+            for x_offset, y_offset, shadow_color in [
+                (-1, 0, "white"),
+                (1, 0, "white"),
+                (0, -1, "white"),
+                (0, 1, "white"),
+            ]:
+                draw.text(
+                    (draw_x + x_offset, current_y + y_offset),
+                    line,
+                    font=font,
+                    fill=shadow_color,
+                    anchor=anchor,
+                    align=align,
+                )
+
+            draw.text(
+                (draw_x, current_y),
+                line,
+                font=font,
+                fill=layout.color,
+                anchor=anchor,
+                align=align,
+            )
+            current_y += layout.line_height
+
+        if clip_mask is not None:
+            overlay_np = np.array(overlay)
+            alpha = overlay_np[:, :, 3]
+            clip_u8 = clip_mask.astype(np.uint8) * 255
+            alpha = cv2.bitwise_and(alpha, clip_u8)
+            overlay_np[:, :, 3] = alpha
+            overlay = Image.fromarray(overlay_np, mode="RGBA")
+
+        return overlay
+
+    def _prepare_block_geometry(
+        self, shape: tuple[int, int], block: TypesetBlock
+    ) -> tuple[np.ndarray | None, Tuple[int, int, int, int], Tuple[int, int, int, int]]:
+        """
+        Calculate clip mask, fence box (fx1, fy1, fx2, fy2), and padded target box (tx1, ty1, tx2, ty2).
+        """
+        h, w = shape
+        x, y, bw, bh = block.box
+        clip_mask = self._build_clip_mask(shape, block)
+        fence_box = self._mask_bounds(clip_mask)
+        if fence_box is None:
+            fence_box = (max(0, x), max(0, y), min(w, x + bw), min(h, y + bh))
+
+        fx1, fy1, fx2, fy2 = fence_box
+        fence_w = max(1, fx2 - fx1)
+        fence_h = max(1, fy2 - fy1)
+
+        padding_ratio = (
+            block.padding_ratio
+            if block.padding_ratio is not None
+            else self.padding_ratio
+        )
+        pad_x = max(4, int(fence_w * padding_ratio))
+        pad_y = max(4, int(fence_h * padding_ratio))
+
+        target_x1 = fx1 + pad_x
+        target_y1 = fy1 + pad_y
+        target_x2 = fx2 - pad_x
+        target_y2 = fy2 - pad_y
+
+        if target_x2 <= target_x1 or target_y2 <= target_y1:
+            target_x1, target_y1, target_x2, target_y2 = fx1, fy1, fx2, fy2
+
+        target_box = (target_x1, target_y1, target_x2, target_y2)
+        return clip_mask, fence_box, target_box
+
+    def render_block_preview_crop(
+        self, block: TypesetBlock, shape: tuple[int, int]
+    ) -> tuple[Image.Image, Tuple[int, int, int, int], TypesetLayout]:
+        h, w = shape
+        bx, by, bw, bh = block.box
+        text = self._normalize_text(block.text)
+
+        clip_mask, fence_box, target_box = self._prepare_block_geometry(shape, block)
+        fx1, fy1, fx2, fy2 = fence_box
+        target_x1, target_y1, target_x2, target_y2 = target_box
+        target_w = max(1, target_x2 - target_x1)
+        target_h = max(1, target_y2 - target_y1)
+
+        if not text.strip() or bw <= 4 or bh <= 4:
+            font_path = self.resolve_font_path(block.font_name)
+            empty_layout = TypesetLayout(
+                lines=[],
+                font_path=font_path,
+                font_size=block.font_size or self.default_font_size,
+                requested_font_size=block.font_size,
+                line_height=self._line_height(self._load_font(self.default_font_size, font_path)),
+                total_height=0,
+                target_box=target_box,
+                text_align=block.text_align,
+                color=block.color,
+                auto_shrunk=False,
+                overflow=False,
+                truncated=False,
+            )
+            margin = 4
+            cx1 = max(0, fx1 - margin)
+            cy1 = max(0, fy1 - margin)
+            cx2 = min(w, fx2 + margin)
+            cy2 = min(h, fy2 + margin)
+            crop_w = max(1, cx2 - cx1)
+            crop_h = max(1, cy2 - cy1)
+            crop_image = Image.new("RGBA", (crop_w, crop_h), (0, 0, 0, 0))
+            return crop_image, (cx1, cy1, crop_w, crop_h), empty_layout
+
+        layout = self.compute_layout(
+            text=block.text,
+            target_w=target_w,
+            target_h=target_h,
+            target_box=target_box,
+            font_name=block.font_name,
+            font_size=block.font_size,
+            auto_fit=block.auto_fit,
+            text_align=block.text_align,
+            color=block.color,
+        )
+
+        full_overlay = self.draw_layout_overlay(layout, shape, clip_mask=clip_mask)
+
+        # Crop around fence box with 4px margin
+        margin = 4
+        cx1 = max(0, fx1 - margin)
+        cy1 = max(0, fy1 - margin)
+        cx2 = min(w, fx2 + margin)
+        cy2 = min(h, fy2 + margin)
+
+        crop_w = max(1, cx2 - cx1)
+        crop_h = max(1, cy2 - cy1)
+        crop_image = full_overlay.crop((cx1, cy1, cx2, cy2))
+        bounds_px = (cx1, cy1, crop_w, crop_h)
+
+        return crop_image, bounds_px, layout
 
     def render(self, base_image: np.ndarray, blocks: List[TypesetBlock]) -> np.ndarray:
         """
@@ -78,83 +467,38 @@ class TypesettingEngine:
         - alpha-composite onto the base image
         """
         base_rgba = Image.fromarray(base_image.astype(np.uint8)).convert("RGBA")
+        h, w = base_image.shape[:2]
 
         for block in blocks:
             text = self._normalize_text(block.text)
             if not text.strip():
                 continue
 
-            x, y, w, h = block.box
-            if w <= 4 or h <= 4:
+            bx, by, bw, bh = block.box
+            if bw <= 4 or bh <= 4:
                 continue
 
-            clip_mask = self._build_clip_mask(base_image.shape[:2], block)
-            fence_box = self._mask_bounds(clip_mask)
-            if fence_box is None:
-                fence_box = (x, y, x + w, y + h)
-
-            fx1, fy1, fx2, fy2 = fence_box
-            fence_w = max(1, fx2 - fx1)
-            fence_h = max(1, fy2 - fy1)
-
-            pad_x = max(4, int(fence_w * self.padding_ratio))
-            pad_y = max(4, int(fence_h * self.padding_ratio))
-
-            target_x1 = fx1 + pad_x
-            target_y1 = fy1 + pad_y
-            target_x2 = fx2 - pad_x
-            target_y2 = fy2 - pad_y
-
-            if target_x2 <= target_x1 or target_y2 <= target_y1:
-                target_x1, target_y1, target_x2, target_y2 = fx1, fy1, fx2, fy2
-
+            clip_mask, fence_box, target_box = self._prepare_block_geometry((h, w), block)
+            target_x1, target_y1, target_x2, target_y2 = target_box
             target_w = max(1, target_x2 - target_x1)
             target_h = max(1, target_y2 - target_y1)
 
-            font_size, font, lines, line_height, total_height = self._fit_text_layout(
-                text, target_w, target_h, block.font_size
+            layout = self.compute_layout(
+                text=block.text,
+                target_w=target_w,
+                target_h=target_h,
+                target_box=target_box,
+                font_name=block.font_name,
+                font_size=block.font_size,
+                auto_fit=block.auto_fit,
+                text_align=block.text_align,
+                color=block.color,
             )
 
-            if not lines:
-                continue
-
-            overlay = Image.new(
-                "RGBA", (base_rgba.width, base_rgba.height), (0, 0, 0, 0)
-            )
-            draw = ImageDraw.Draw(overlay)
-
-            current_y = target_y1 + max(0, (target_h - total_height) // 2)
-
-            for line in lines:
-                bbox = self._text_bbox(font, line)
-                line_x = target_x1 + target_w // 2
-
-                draw.text(
-                    (line_x, current_y),
-                    line,
-                    font=font,
-                    fill=self._color_to_rgba(block.color),
-                    anchor="ma",
-                    align="center",
-                )
-                current_y += line_height
-
-            # Bubble fencing: clip rendered text so it cannot escape the bubble.
-            overlay_np = np.array(overlay)
-            alpha = overlay_np[:, :, 3]
-
-            clip_u8 = clip_mask.astype(np.uint8) * 255
-            alpha = cv2.bitwise_and(alpha, clip_u8)
-            overlay_np[:, :, 3] = alpha
-
-            clipped_overlay = Image.fromarray(overlay_np, mode="RGBA")
-            base_rgba = Image.alpha_composite(base_rgba, clipped_overlay)
+            overlay = self.draw_layout_overlay(layout, (h, w), clip_mask=clip_mask)
+            base_rgba = Image.alpha_composite(base_rgba, overlay)
 
         return np.array(base_rgba.convert("RGB"))
-
-    # ------------------------------------------------------------------
-    # Layout / fitting
-    # ------------------------------------------------------------------
 
     def _fit_text_layout(
         self,
@@ -163,77 +507,21 @@ class TypesettingEngine:
         target_h: int,
         preferred_font_size: int | None = None,
     ) -> tuple[int, ImageFont.FreeTypeFont | ImageFont.ImageFont, List[str], int, int]:
-        """
-        Find the largest font size whose wrapped text fits within target_w/target_h.
-        """
-        if preferred_font_size is not None:
-            # Treat preferred size as an upper bound, not a hard lock.
-            # This lets the engine shrink text when the translated string is
-            # longer than the source and would otherwise overflow the bubble.
-            start = min(self.max_font_size, max(self.min_font_size, preferred_font_size))
-            stop = self.min_font_size
-        else:
-            start = self.max_font_size
-            stop = self.min_font_size
-
-        best_font_size = self.min_font_size
-        best_font = self._load_font(self.min_font_size)
-        best_lines = [text]
-        best_line_height = self._line_height(best_font)
-        best_total_height = best_line_height
-        best_overflow_score = float("inf")
-
-        for size in range(start, stop - 1, -1):
-            font = self._load_font(size)
-            force_b = (size == stop)
-            wrap_strategies: list[Callable[[str, ImageFont.FreeTypeFont | ImageFont.ImageFont, int], List[str]]] = [
-                lambda t, f, w: self._wrap_text(t, f, w, force_break=force_b),
-                lambda t, f, w: self._wrap_text_compact(t, f, w, force_break=force_b),
-            ]
-
-            for wrap_strategy in wrap_strategies:
-                lines = wrap_strategy(text, font, target_w)
-
-                if not lines:
-                    continue
-
-                if any(self._line_width(font, line) > target_w for line in lines):
-                    continue
-
-                line_height = self._line_height(font)
-                total_height = line_height * len(lines)
-                overflow_score = max(0, total_height - target_h)
-
-                if total_height <= target_h:
-                    return size, font, lines, line_height, total_height
-
-                if overflow_score < best_overflow_score:
-                    best_font_size = size
-                    best_font = font
-                    best_lines = lines
-                    best_line_height = line_height
-                    best_total_height = total_height
-                    best_overflow_score = overflow_score
-
-                # Continue searching smaller sizes so translated text can
-                # still fit even when the preferred size is too large.
-
-        # Last-resort safety: return a layout that truly fits vertically.
-        best_lines = self._clip_lines_to_height(
-            best_lines,
-            best_font,
-            best_line_height,
-            target_w,
-            target_h,
+        layout = self.compute_layout(
+            text=text,
+            target_w=target_w,
+            target_h=target_h,
+            target_box=(0, 0, target_w, target_h),
+            font_size=preferred_font_size,
+            auto_fit=True,
         )
-        best_total_height = min(target_h, best_line_height * len(best_lines))
-
+        font = self._load_font(layout.font_size, layout.font_path)
         return (
-            best_font_size,
-            best_font,
-            best_lines,
-            best_line_height,
-            best_total_height,
+            layout.font_size,
+            font,
+            layout.lines,
+            layout.line_height,
+            layout.total_height,
         )
 
     def _wrap_text(
@@ -590,10 +878,13 @@ class TypesettingEngine:
     # Font / metrics helpers
     # ------------------------------------------------------------------
 
-    def _load_font(self, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-        if self.font_path:
+    def _load_font(
+        self, size: int, font_path: str | None = None
+    ) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+        path = font_path or self.font_path
+        if path:
             try:
-                return ImageFont.truetype(self.font_path, size)
+                return ImageFont.truetype(path, size)
             except Exception:
                 pass
         return ImageFont.load_default()

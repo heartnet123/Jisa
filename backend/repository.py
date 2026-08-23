@@ -22,6 +22,11 @@ class RegionRecord:
     source_text: str | None = None
     translated_text: str | None = None
     mask_path: str | None = None
+    font_name: str | None = None
+    font_size: int | None = None
+    auto_fit: bool = True
+    text_align: str = "center"
+    padding_ratio: float = 0.10
 
 
 class ReviewRepository(Protocol):
@@ -66,7 +71,7 @@ class ReviewRepository(Protocol):
 
 
 class SQLiteReviewRepository:
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 3
     _JOB_COLUMNS = (
         "id",
         "filename",
@@ -152,6 +157,11 @@ class SQLiteReviewRepository:
                             source_text TEXT,
                             translated_text TEXT,
                             mask_path TEXT,
+                            font_name TEXT,
+                            font_size INTEGER,
+                            auto_fit INTEGER NOT NULL DEFAULT 1,
+                            text_align TEXT NOT NULL DEFAULT 'center',
+                            padding_ratio REAL NOT NULL DEFAULT 0.10,
                             PRIMARY KEY (job_id, id),
                             UNIQUE (job_id, ordinal),
                             FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
@@ -186,80 +196,104 @@ class SQLiteReviewRepository:
                         PRAGMA user_version = {self.SCHEMA_VERSION};
                         """
                     )
-            elif version == 1:
-                self._connection.execute("BEGIN IMMEDIATE")
-                try:
-                    jobs_columns = self._table_columns("jobs")
-                    if "sequence_id" not in jobs_columns:
-                        self._connection.execute(
-                            "ALTER TABLE jobs ADD COLUMN sequence_id INTEGER"
-                        )
-
-                    self._connection.execute(
-                        """
-                        CREATE TABLE IF NOT EXISTS pending_asset_deletions (
-                            path TEXT PRIMARY KEY,
-                            created_at TEXT NOT NULL
-                        )
-                        """
-                    )
-                    self._connection.execute(
-                        "CREATE INDEX IF NOT EXISTS jobs_project_id_idx ON jobs(project_id)"
-                    )
-                    self._connection.execute(
-                        "CREATE INDEX IF NOT EXISTS jobs_sequence_id_idx ON jobs(sequence_id)"
-                    )
-                    self._connection.execute(
-                        """
-                        CREATE UNIQUE INDEX IF NOT EXISTS jobs_project_sequence_idx
-                            ON jobs(project_id, sequence_id)
-                            WHERE project_id IS NOT NULL
-                        """
-                    )
-
-                    projects = self._connection.execute(
-                        "SELECT id, job_ids_json, page_order_json FROM projects"
-                    ).fetchall()
-                    for proj in projects:
-                        project_id = proj["id"]
-                        page_order_raw = self._json_list_or_empty(proj["page_order_json"])
-                        job_ids_raw = self._json_list_or_empty(proj["job_ids_json"])
-
-                        self._connection.execute(
-                            "UPDATE jobs SET sequence_id = NULL WHERE project_id = ?",
-                            (project_id,),
-                        )
-
-                        db_jobs = self._connection.execute(
-                            "SELECT id FROM jobs WHERE project_id = ? ORDER BY created_at, rowid",
-                            (project_id,),
-                        ).fetchall()
-                        db_job_ids = {row["id"] for row in db_jobs}
-
-                        ordered_ids: list[str] = []
-                        for jid in page_order_raw:
-                            if jid in db_job_ids and jid not in ordered_ids:
-                                ordered_ids.append(jid)
-                        for jid in job_ids_raw:
-                            if jid in db_job_ids and jid not in ordered_ids:
-                                ordered_ids.append(jid)
-                        for row in db_jobs:
-                            jid = row["id"]
-                            if jid not in ordered_ids:
-                                ordered_ids.append(jid)
-
-                        for seq_idx, jid in enumerate(ordered_ids):
+            else:
+                if version == 1:
+                    self._connection.execute("BEGIN IMMEDIATE")
+                    try:
+                        jobs_columns = self._table_columns("jobs")
+                        if "sequence_id" not in jobs_columns:
                             self._connection.execute(
-                                "UPDATE jobs SET sequence_id = ? WHERE id = ?",
-                                (seq_idx, jid),
+                                "ALTER TABLE jobs ADD COLUMN sequence_id INTEGER"
                             )
 
-                    self._connection.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
-                except Exception:
-                    self._connection.rollback()
-                    raise
-                else:
-                    self._connection.commit()
+                        self._connection.execute(
+                            """
+                            CREATE TABLE IF NOT EXISTS pending_asset_deletions (
+                                path TEXT PRIMARY KEY,
+                                created_at TEXT NOT NULL
+                            )
+                            """
+                        )
+                        self._connection.execute(
+                            "CREATE INDEX IF NOT EXISTS jobs_project_id_idx ON jobs(project_id)"
+                        )
+                        self._connection.execute(
+                            "CREATE INDEX IF NOT EXISTS jobs_sequence_id_idx ON jobs(sequence_id)"
+                        )
+                        self._connection.execute(
+                            """
+                            CREATE UNIQUE INDEX IF NOT EXISTS jobs_project_sequence_idx
+                                ON jobs(project_id, sequence_id)
+                                WHERE project_id IS NOT NULL
+                            """
+                        )
+
+                        projects = self._connection.execute(
+                            "SELECT id, job_ids_json, page_order_json FROM projects"
+                        ).fetchall()
+                        for proj in projects:
+                            project_id = proj["id"]
+                            page_order_raw = self._json_list_or_empty(proj["page_order_json"])
+                            job_ids_raw = self._json_list_or_empty(proj["job_ids_json"])
+
+                            self._connection.execute(
+                                "UPDATE jobs SET sequence_id = NULL WHERE project_id = ?",
+                                (project_id,),
+                            )
+
+                            db_jobs = self._connection.execute(
+                                "SELECT id FROM jobs WHERE project_id = ? ORDER BY created_at, rowid",
+                                (project_id,),
+                            ).fetchall()
+                            db_job_ids = {row["id"] for row in db_jobs}
+
+                            ordered_ids: list[str] = []
+                            for jid in page_order_raw:
+                                if jid in db_job_ids and jid not in ordered_ids:
+                                    ordered_ids.append(jid)
+                            for jid in job_ids_raw:
+                                if jid in db_job_ids and jid not in ordered_ids:
+                                    ordered_ids.append(jid)
+                            for row in db_jobs:
+                                jid = row["id"]
+                                if jid not in ordered_ids:
+                                    ordered_ids.append(jid)
+
+                            for seq_idx, jid in enumerate(ordered_ids):
+                                self._connection.execute(
+                                    "UPDATE jobs SET sequence_id = ? WHERE id = ?",
+                                    (seq_idx, jid),
+                                )
+
+                        self._connection.execute("PRAGMA user_version = 2")
+                    except Exception:
+                        self._connection.rollback()
+                        raise
+                    else:
+                        self._connection.commit()
+                    version = 2
+
+                if version == 2:
+                    self._connection.execute("BEGIN IMMEDIATE")
+                    try:
+                        regions_columns = self._table_columns("regions")
+                        if "font_name" not in regions_columns:
+                            self._connection.execute("ALTER TABLE regions ADD COLUMN font_name TEXT")
+                        if "font_size" not in regions_columns:
+                            self._connection.execute("ALTER TABLE regions ADD COLUMN font_size INTEGER")
+                        if "auto_fit" not in regions_columns:
+                            self._connection.execute("ALTER TABLE regions ADD COLUMN auto_fit INTEGER NOT NULL DEFAULT 1")
+                        if "text_align" not in regions_columns:
+                            self._connection.execute("ALTER TABLE regions ADD COLUMN text_align TEXT NOT NULL DEFAULT 'center'")
+                        if "padding_ratio" not in regions_columns:
+                            self._connection.execute("ALTER TABLE regions ADD COLUMN padding_ratio REAL NOT NULL DEFAULT 0.10")
+
+                        self._connection.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
+                    except Exception:
+                        self._connection.rollback()
+                        raise
+                    else:
+                        self._connection.commit()
 
     @staticmethod
     def _json_list_or_empty(raw: Any) -> list[str]:
@@ -506,6 +540,7 @@ class SQLiteReviewRepository:
             record = asdict(region)
             record["job_id"] = job_id
             record["order"] = order
+            record["auto_fit"] = 1 if region.auto_fit else 0
             rows.append(record)
 
         with self._lock, self._connection:
@@ -514,10 +549,12 @@ class SQLiteReviewRepository:
                 """
                 INSERT INTO regions (
                     id, job_id, ordinal, x, y, width, height, source,
-                    source_text, translated_text, mask_path
+                    source_text, translated_text, mask_path,
+                    font_name, font_size, auto_fit, text_align, padding_ratio
                 ) VALUES (
                     :id, :job_id, :order, :x, :y, :width, :height, :source,
-                    :source_text, :translated_text, :mask_path
+                    :source_text, :translated_text, :mask_path,
+                    :font_name, :font_size, :auto_fit, :text_align, :padding_ratio
                 )
                 """,
                 rows,
@@ -528,7 +565,8 @@ class SQLiteReviewRepository:
             rows = self._connection.execute(
                 """
                 SELECT id, job_id, ordinal, x, y, width, height, source,
-                       source_text, translated_text, mask_path
+                       source_text, translated_text, mask_path,
+                       font_name, font_size, auto_fit, text_align, padding_ratio
                 FROM regions
                 WHERE job_id = ?
                 ORDER BY ordinal
@@ -548,6 +586,11 @@ class SQLiteReviewRepository:
                 source_text=row["source_text"],
                 translated_text=row["translated_text"],
                 mask_path=row["mask_path"],
+                font_name=row["font_name"],
+                font_size=row["font_size"],
+                auto_fit=bool(row["auto_fit"]) if row["auto_fit"] is not None else True,
+                text_align=row["text_align"] if row["text_align"] is not None else "center",
+                padding_ratio=float(row["padding_ratio"]) if row["padding_ratio"] is not None else 0.10,
             )
             for row in rows
         ]
