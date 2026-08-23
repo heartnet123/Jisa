@@ -60,6 +60,19 @@ export function RegionInspectorCard({
 }: RegionInspectorCardProps) {
   const busy = action !== null;
 
+  const fontSizeMin = typesettingOptions?.font_size.min ?? 8;
+  const fontSizeMax = typesettingOptions?.font_size.max ?? 72;
+  const currentFontSize = typesettingValue.font_size ?? 20;
+
+  const currentPaddingRatio = typesettingValue.padding_ratio ?? 0.1;
+  const currentPaddingPercent = Math.round(currentPaddingRatio * 100);
+  const paddingMinPercent = Math.round((typesettingOptions?.padding_ratio.min ?? 0.0) * 100);
+  const paddingMaxPercent = Math.round((typesettingOptions?.padding_ratio.max ?? 0.30) * 100);
+  const paddingStepPercent = Math.max(1, Math.round((typesettingOptions?.padding_ratio.step ?? 0.01) * 100));
+
+  const [fontSizeInput, setFontSizeInput] = useState<string>(String(currentFontSize));
+  const [paddingInput, setPaddingInput] = useState<string>(String(currentPaddingPercent));
+
   const handleFontChange = (fontName: string) => {
     onTypesettingChange(block.id, {
       ...typesettingValue,
@@ -110,17 +123,6 @@ export function RegionInspectorCard({
     });
   };
 
-  const fontSizeMin = typesettingOptions?.font_size.min ?? 8;
-  const fontSizeMax = typesettingOptions?.font_size.max ?? 72;
-  const currentFontSize = typesettingValue.font_size ?? 20;
-
-  const currentPaddingRatio = typesettingValue.padding_ratio ?? 0.1;
-  const currentPaddingPercent = Math.round(currentPaddingRatio * 100);
-
-  const [fontSizeInput, setFontSizeInput] = useState<string>(String(currentFontSize));
-  const [paddingInput, setPaddingInput] = useState<string>(String(currentPaddingPercent));
-
-
   useEffect(() => {
     setFontSizeInput(String(currentFontSize));
   }, [currentFontSize]);
@@ -146,7 +148,7 @@ export function RegionInspectorCard({
     if (isNaN(num)) {
       num = currentPaddingPercent;
     }
-    const clamped = Math.max(0, Math.min(30, num));
+    const clamped = Math.max(paddingMinPercent, Math.min(paddingMaxPercent, num));
     setPaddingInput(String(clamped));
     const newRatio = Number((clamped / 100).toFixed(2));
     if (newRatio !== (typesettingValue.padding_ratio ?? 0.1)) {
@@ -353,9 +355,9 @@ export function RegionInspectorCard({
                 <div className="flex items-center border border-border bg-panel p-0.5 rounded">
                   <button
                     type="button"
-                    disabled={disabled || busy || currentPaddingPercent <= 0}
+                    disabled={disabled || busy || currentPaddingPercent <= paddingMinPercent}
                     onClick={() => {
-                      const nextPct = Math.max(0, currentPaddingPercent - 1);
+                      const nextPct = Math.max(paddingMinPercent, currentPaddingPercent - paddingStepPercent);
                       setPaddingInput(String(nextPct));
                       handlePaddingChange(Number((nextPct / 100).toFixed(2)));
                     }}
@@ -384,9 +386,9 @@ export function RegionInspectorCard({
                   </div>
                   <button
                     type="button"
-                    disabled={disabled || busy || currentPaddingPercent >= 30}
+                    disabled={disabled || busy || currentPaddingPercent >= paddingMaxPercent}
                     onClick={() => {
-                      const nextPct = Math.min(30, currentPaddingPercent + 1);
+                      const nextPct = Math.min(paddingMaxPercent, currentPaddingPercent + paddingStepPercent);
                       setPaddingInput(String(nextPct));
                       handlePaddingChange(Number((nextPct / 100).toFixed(2)));
                     }}
@@ -401,16 +403,22 @@ export function RegionInspectorCard({
 
             {/* Alignment */}
             <div>
-              <label className="mb-1 block font-mono text-[11px] uppercase tracking-wider text-muted">
+              <span id={`alignment-label-${block.id}`} className="mb-1 block font-mono text-[11px] uppercase tracking-wider text-muted">
                 Alignment
-              </label>
-              <div className="flex border border-border bg-panel p-0.5 rounded">
+              </span>
+              <div
+                role="group"
+                aria-labelledby={`alignment-label-${block.id}`}
+                className="flex border border-border bg-panel p-0.5 rounded"
+              >
                 {(["left", "center", "right"] as TextAlign[]).map(align => (
                   <button
                     key={align}
                     type="button"
                     disabled={disabled || busy}
                     onClick={() => handleAlignChange(align)}
+                    aria-label={`Align text ${align}`}
+                    aria-pressed={typesettingValue.text_align === align}
                     className={`flex-1 py-1 text-center font-mono text-xs uppercase tracking-wider transition-colors ${
                       typesettingValue.text_align === align
                         ? "bg-accent font-bold text-white"

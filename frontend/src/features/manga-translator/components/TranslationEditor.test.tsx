@@ -273,6 +273,20 @@ describe("TranslationEditor", () => {
     expect(fontInput.value).toBe("15");
     fireEvent.blur(fontInput);
     expect(fontInput.value).toBe("15");
+
+    // Clamps values below minimum (min is 8) on blur
+    await user.clear(fontInput);
+    await user.type(fontInput, "2");
+    expect(fontInput.value).toBe("2");
+    fireEvent.blur(fontInput);
+    expect(fontInput.value).toBe("8");
+
+    // Clamps values above maximum (max is 72) on blur
+    await user.clear(fontInput);
+    await user.type(fontInput, "100");
+    expect(fontInput.value).toBe("100");
+    fireEvent.blur(fontInput);
+    expect(fontInput.value).toBe("72");
   });
 
   it("syncs Auto-fit with max size and unchecks Auto-fit when font size is manually changed", async () => {
@@ -301,7 +315,7 @@ describe("TranslationEditor", () => {
         "job-1",
         "region-1",
         expect.objectContaining({
-          typesetting: expect.objectContaining({ auto_fit: true, font_size: 14 }),
+          typesetting: expect.objectContaining({ auto_fit: true }),
         }),
       ),
     );

@@ -106,10 +106,18 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
   );
   const [showMaskPreview, setShowMaskPreview] = useState(Boolean(item.mask_preview_url));
 
+  const [typesettingOptionsError, setTypesettingOptionsError] = useState<string | null>(null);
+
   useEffect(() => {
     mangaApi.getTypesettingOptions()
-      .then(setTypesettingOptions)
-      .catch(err => console.error('Failed to load typesetting options:', err));
+      .then(opts => {
+        setTypesettingOptions(opts);
+        setTypesettingOptionsError(null);
+      })
+      .catch(err => {
+        console.error('Failed to load typesetting options:', err);
+        setTypesettingOptionsError(err instanceof Error ? err.message : 'Failed to load typesetting options');
+      });
   }, []);
 
   const selectedBlock = selectedBlockId ? blocks.find(b => b.id === selectedBlockId) : null;
@@ -159,6 +167,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
           setPreviewCache(prev => ({
             ...prev,
             [blockId]: {
+              mimeType: res.mime_type,
               base64: res.overlay_base64,
               bounds: res.bounds_px,
               lines: res.lines,
@@ -187,9 +196,14 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
 
     return () => clearTimeout(timer);
   }, [
+    item.id,
     selectedBlockId,
     selectedTranslation,
-    JSON.stringify(selectedTypesetting),
+    selectedTypesetting?.font_name,
+    selectedTypesetting?.auto_fit,
+    selectedTypesetting?.auto_fit ? undefined : selectedTypesetting?.font_size,
+    selectedTypesetting?.text_align,
+    selectedTypesetting?.padding_ratio,
     selectedBlock?.box.x,
     selectedBlock?.box.y,
     selectedBlock?.box.width,
@@ -233,6 +247,9 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
         new Set([...previous].filter(blockId => savedIds.has(blockId))),
       );
       setDirtyTranslationIds(previous =>
+        new Set([...previous].filter(blockId => savedIds.has(blockId))),
+      );
+      setDirtyTypesettingIds(previous =>
         new Set([...previous].filter(blockId => savedIds.has(blockId))),
       );
       onUpdate(item.id, {
@@ -570,6 +587,12 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
               <div role="alert" className="flex items-center gap-2 border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-500 rounded">
                 <Icon icon="solar:danger-triangle-linear" className="text-base" />
                 <span>{regionError}</span>
+              </div>
+            ) : null}
+            {typesettingOptionsError ? (
+              <div role="alert" className="flex items-center gap-2 border border-yellow-500/30 bg-yellow-500/10 p-3 text-xs text-yellow-500 rounded">
+                <Icon icon="solar:danger-triangle-linear" className="text-base" />
+                <span>{typesettingOptionsError}</span>
               </div>
             ) : null}
 

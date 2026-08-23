@@ -52,6 +52,7 @@ interface PendingUpdate {
 
 export interface TypesetPreviewOverlayItem {
   base64?: string;
+  mimeType?: string;
   bounds?: { x: number; y: number; width: number; height: number };
   loading?: boolean;
   error?: string | null;
@@ -247,6 +248,10 @@ export function RegionCanvas({
   const pendingRef = useRef<PendingUpdate | null>(null);
   const frameRef = useRef<number | null>(null);
   const draftRef = useRef<NormalizedBox | null>(null);
+
+  useEffect(() => {
+    setImageDimensions(null);
+  }, [imageUrl]);
 
   useEffect(() => {
     blocksRef.current = blocks;
@@ -514,25 +519,17 @@ export function RegionCanvas({
           >
             {blocks.map(block => {
               const overlay = previewOverlays?.[block.id];
-              if (!overlay?.base64 || !overlay.bounds) return null;
-              const { bounds, base64 } = overlay;
-              const x = imageDimensions
-                ? (bounds.x / imageDimensions.width) * 100
-                : block.box.x * 100;
-              const y = imageDimensions
-                ? (bounds.y / imageDimensions.height) * 100
-                : block.box.y * 100;
-              const width = imageDimensions
-                ? (bounds.width / imageDimensions.width) * 100
-                : block.box.width * 100;
-              const height = imageDimensions
-                ? (bounds.height / imageDimensions.height) * 100
-                : block.box.height * 100;
+              if (!overlay?.base64 || !overlay.bounds || !imageDimensions) return null;
+              const { bounds, base64, mimeType } = overlay;
+              const x = (bounds.x / imageDimensions.width) * 100;
+              const y = (bounds.y / imageDimensions.height) * 100;
+              const width = (bounds.width / imageDimensions.width) * 100;
+              const height = (bounds.height / imageDimensions.height) * 100;
 
               return (
                 <image
                   key={`preview-crop-${block.id}`}
-                  href={`data:image/png;base64,${base64}`}
+                  href={`data:${mimeType || "image/png"};base64,${base64}`}
                   x={x}
                   y={y}
                   width={width}
