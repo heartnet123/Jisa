@@ -180,13 +180,14 @@ PAGE_CONTEXT_TRANSLATION=true
 | `GET` | `/api/ollama/status` | Verify Ollama OCR connectivity |
 | `POST` | `/api/translate` | Upload manga page(s) and start processing job |
 | `GET` | `/api/status/{job_id}` | Retrieve job status, progress, and output artifact URLs |
+| `GET` | `/api/typesetting/options` | Retrieve available font options, size ranges, alignments, and padding ratios |
+| `POST` | `/api/jobs/{job_id}/regions/{region_id}/typeset-preview` | Generate live cropped preview overlay with layout metrics for a single region |
 
 ### Upload Request Example
 
 ```bash
 curl -X POST "http://localhost:8000/api/translate" \
   -H "accept: application/json" \
-  -H "Content-Type: multipart/form-data" \
   -F "file=@manga_page.jpg"
 ```
 
