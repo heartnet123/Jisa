@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="./jisa-logo.png" alt="Jisa Logo" width="180" />
+
 # Jisa
 
 *An end-to-end local-first manga translation system with speech bubble detection, OCR, page-context translation, inpainting, and typesetting.*
