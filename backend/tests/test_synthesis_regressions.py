@@ -88,6 +88,7 @@ class TypesettingRegressionTests(unittest.TestCase):
             auto_fit=False,
         )
         self.assertTrue(layout.overflow)
+        self.assertTrue(layout.truncated)
 
     def test_preview_crop_and_render_parity(self) -> None:
         from synthesis.typesetting import TypesetBlock
@@ -108,6 +109,8 @@ class TypesettingRegressionTests(unittest.TestCase):
         self.assertEqual(bounds_px[2], crop_img.width)
         self.assertEqual(bounds_px[3], crop_img.height)
         self.assertFalse(layout.overflow)
+        crop_np = np.array(crop_img)
+        self.assertGreater(int(np.sum(crop_np[:, :, 3] > 0)), 0)
 
 
 class InpaintingRegressionTests(unittest.TestCase):

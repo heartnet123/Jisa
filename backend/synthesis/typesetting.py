@@ -164,8 +164,8 @@ class TypesettingEngine:
                 wrap_strategies: list[
                     Callable[[str, ImageFont.FreeTypeFont | ImageFont.ImageFont, int], List[str]]
                 ] = [
-                    lambda t, f, w: self._wrap_text(t, f, w, force_break=force_b),
-                    lambda t, f, w: self._wrap_text_compact(t, f, w, force_break=force_b),
+                    lambda t, f, w, fb=force_b: self._wrap_text(t, f, w, force_break=fb),
+                    lambda t, f, w, fb=force_b: self._wrap_text_compact(t, f, w, force_break=fb),
                 ]
 
                 for wrap_strategy in wrap_strategies:
@@ -216,6 +216,9 @@ class TypesettingEngine:
                             truncated=False,
                         )
 
+            if best_layout is not None:
+                return best_layout
+
             # Reached min size without fitting vertically
             font = self._load_font(self.min_font_size, font_path)
             lines = self._wrap_text(normalized, font, target_w, force_break=True)
@@ -224,7 +227,7 @@ class TypesettingEngine:
                 lines, font, line_height, target_w, target_h
             )
             truncated = (len(clipped_lines) < len(lines)) or any(
-                c != o for c, o in zip(clipped_lines, lines)
+                c != o for c, o in zip(clipped_lines, lines, strict=False)
             )
             return TypesetLayout(
                 lines=clipped_lines,
@@ -257,7 +260,7 @@ class TypesettingEngine:
                 lines, font, line_height, target_w, target_h
             )
             truncated = (len(clipped_lines) < len(lines)) or any(
-                c != o for c, o in zip(clipped_lines, lines)
+                c != o for c, o in zip(clipped_lines, lines, strict=False)
             )
             return TypesetLayout(
                 lines=clipped_lines,
@@ -280,46 +283,64 @@ class TypesettingEngine:
         canvas_shape: tuple[int, int],
         clip_mask: np.ndarray | None = None,
     ) -> Image.Image:
+        """
+        Draw lines of text onto a transparent RGBA image matching canvas_shape (H, W).
+        If clip_mask is provided (H, W uint8 binary mask), text is masked to that region.
+        """
         h, w = canvas_shape
         overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay)
 
         if not layout.lines:
             return overlay
 
-        draw = ImageDraw.Draw(overlay)
         font = self._load_font(layout.font_size, layout.font_path)
         tx1, ty1, tx2, ty2 = layout.target_box
-        target_w = max(1, tx2 - tx1)
-        target_h = max(1, ty2 - ty1)
+        box_w = max(1, tx2 - tx1)
+        box_h = max(1, ty2 - ty1)
 
-        current_y = ty1 + max(0, (target_h - layout.total_height) // 2)
+        # Vertical center within the target box
+        start_y = ty1 + max(0, (box_h - layout.total_height) // 2)
 
-        align_mode = layout.text_align.lower()
-        if align_mode == "left":
-            line_x = tx1
-            anchor = "la"
-            align = "left"
-        elif align_mode == "right":
-            line_x = tx2
-            anchor = "ra"
-            align = "right"
-        else:
-            line_x = tx1 + target_w // 2
-            anchor = "ma"
-            align = "center"
-
-        color_rgba = self._color_to_rgba(layout.color)
-
+        current_y = start_y
         for line in layout.lines:
-            if line:
+            line_w = self._line_width(font, line)
+            if layout.text_align == "left":
+                draw_x = tx1
+                anchor = "la"
+                align = "left"
+            elif layout.text_align == "right":
+                draw_x = tx2
+                anchor = "ra"
+                align = "right"
+            else:
+                draw_x = tx1 + (box_w // 2)
+                anchor = "ma"
+                align = "center"
+
+            for x_offset, y_offset, shadow_color in [
+                (-1, 0, "white"),
+                (1, 0, "white"),
+                (0, -1, "white"),
+                (0, 1, "white"),
+            ]:
                 draw.text(
-                    (line_x, current_y),
+                    (draw_x + x_offset, current_y + y_offset),
                     line,
                     font=font,
-                    fill=color_rgba,
+                    fill=shadow_color,
                     anchor=anchor,
                     align=align,
                 )
+
+            draw.text(
+                (draw_x, current_y),
+                line,
+                font=font,
+                fill=layout.color,
+                anchor=anchor,
+                align=align,
+            )
             current_y += layout.line_height
 
         if clip_mask is not None:
@@ -332,9 +353,12 @@ class TypesettingEngine:
 
         return overlay
 
-    def render_block_preview_crop(
-        self, block: TypesetBlock, shape: tuple[int, int]
-    ) -> tuple[Image.Image, Tuple[int, int, int, int], TypesetLayout]:
+    def _prepare_block_geometry(
+        self, shape: tuple[int, int], block: TypesetBlock
+    ) -> tuple[np.ndarray | None, Tuple[int, int, int, int], Tuple[int, int, int, int]]:
+        """
+        Calculate clip mask, fence box (fx1, fy1, fx2, fy2), and padded target box (tx1, ty1, tx2, ty2).
+        """
         h, w = shape
         x, y, bw, bh = block.box
         clip_mask = self._build_clip_mask(shape, block)
@@ -346,7 +370,11 @@ class TypesettingEngine:
         fence_w = max(1, fx2 - fx1)
         fence_h = max(1, fy2 - fy1)
 
-        padding_ratio = block.padding_ratio if block.padding_ratio is not None else self.padding_ratio
+        padding_ratio = (
+            block.padding_ratio
+            if block.padding_ratio is not None
+            else self.padding_ratio
+        )
         pad_x = max(4, int(fence_w * padding_ratio))
         pad_y = max(4, int(fence_h * padding_ratio))
 
@@ -358,14 +386,53 @@ class TypesettingEngine:
         if target_x2 <= target_x1 or target_y2 <= target_y1:
             target_x1, target_y1, target_x2, target_y2 = fx1, fy1, fx2, fy2
 
+        target_box = (target_x1, target_y1, target_x2, target_y2)
+        return clip_mask, fence_box, target_box
+
+    def render_block_preview_crop(
+        self, block: TypesetBlock, shape: tuple[int, int]
+    ) -> tuple[Image.Image, Tuple[int, int, int, int], TypesetLayout]:
+        h, w = shape
+        bx, by, bw, bh = block.box
+        text = self._normalize_text(block.text)
+
+        clip_mask, fence_box, target_box = self._prepare_block_geometry(shape, block)
+        fx1, fy1, fx2, fy2 = fence_box
+        target_x1, target_y1, target_x2, target_y2 = target_box
         target_w = max(1, target_x2 - target_x1)
         target_h = max(1, target_y2 - target_y1)
+
+        if not text.strip() or bw <= 4 or bh <= 4:
+            font_path = self.resolve_font_path(block.font_name)
+            empty_layout = TypesetLayout(
+                lines=[],
+                font_path=font_path,
+                font_size=block.font_size or self.default_font_size,
+                requested_font_size=block.font_size,
+                line_height=self._line_height(self._load_font(self.default_font_size, font_path)),
+                total_height=0,
+                target_box=target_box,
+                text_align=block.text_align,
+                color=block.color,
+                auto_shrunk=False,
+                overflow=False,
+                truncated=False,
+            )
+            margin = 4
+            cx1 = max(0, fx1 - margin)
+            cy1 = max(0, fy1 - margin)
+            cx2 = min(w, fx2 + margin)
+            cy2 = min(h, fy2 + margin)
+            crop_w = max(1, cx2 - cx1)
+            crop_h = max(1, cy2 - cy1)
+            crop_image = Image.new("RGBA", (crop_w, crop_h), (0, 0, 0, 0))
+            return crop_image, (cx1, cy1, crop_w, crop_h), empty_layout
 
         layout = self.compute_layout(
             text=block.text,
             target_w=target_w,
             target_h=target_h,
-            target_box=(target_x1, target_y1, target_x2, target_y2),
+            target_box=target_box,
             font_name=block.font_name,
             font_size=block.font_size,
             auto_fit=block.auto_fit,
@@ -411,27 +478,8 @@ class TypesettingEngine:
             if bw <= 4 or bh <= 4:
                 continue
 
-            clip_mask = self._build_clip_mask((h, w), block)
-            fence_box = self._mask_bounds(clip_mask)
-            if fence_box is None:
-                fence_box = (max(0, bx), max(0, by), min(w, bx + bw), min(h, by + bh))
-
-            fx1, fy1, fx2, fy2 = fence_box
-            fence_w = max(1, fx2 - fx1)
-            fence_h = max(1, fy2 - fy1)
-
-            padding_ratio = block.padding_ratio if block.padding_ratio is not None else self.padding_ratio
-            pad_x = max(4, int(fence_w * padding_ratio))
-            pad_y = max(4, int(fence_h * padding_ratio))
-
-            target_x1 = fx1 + pad_x
-            target_y1 = fy1 + pad_y
-            target_x2 = fx2 - pad_x
-            target_y2 = fy2 - pad_y
-
-            if target_x2 <= target_x1 or target_y2 <= target_y1:
-                target_x1, target_y1, target_x2, target_y2 = fx1, fy1, fx2, fy2
-
+            clip_mask, fence_box, target_box = self._prepare_block_geometry((h, w), block)
+            target_x1, target_y1, target_x2, target_y2 = target_box
             target_w = max(1, target_x2 - target_x1)
             target_h = max(1, target_y2 - target_y1)
 
@@ -439,7 +487,7 @@ class TypesettingEngine:
                 text=block.text,
                 target_w=target_w,
                 target_h=target_h,
-                target_box=(target_x1, target_y1, target_x2, target_y2),
+                target_box=target_box,
                 font_name=block.font_name,
                 font_size=block.font_size,
                 auto_fit=block.auto_fit,
