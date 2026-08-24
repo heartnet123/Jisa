@@ -87,6 +87,14 @@ def get_provider_default_model(provider: str) -> str:
     return DEFAULT_FALLBACK_MODEL
 
 
+def get_provider_default_base(provider: str) -> Optional[str]:
+    p_lower = provider.lower()
+    for prov in PRESET_PROVIDERS:
+        if prov["id"] == p_lower:
+            return prov.get("default_base")
+    return None
+
+
 class BYOKConfig(BaseModel):
     provider: str = Field(default="openai", description="AI Provider ID (openai, anthropic, gemini, ollama, openrouter, deepseek, custom)")
     api_key: Optional[str] = Field(default=None, description="API Key for the provider")
@@ -114,8 +122,8 @@ def extract_byok_config(request: Optional[Request] = None, headers: Optional[Dic
     # Clean up empty strings or placeholders
     if api_key in ["", "your_api_key_here"]:
         api_key = None
-    if api_base == "":
-        api_base = None
+    if not api_base or api_base.strip() == "":
+        api_base = get_provider_default_base(provider)
 
     return BYOKConfig(
         provider=provider.lower(),

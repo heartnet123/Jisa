@@ -44,6 +44,17 @@ class TestBYOK(unittest.TestCase):
         self.assertEqual(config.model, "gemini-1.5-flash")
         self.assertEqual(config.api_base, "https://generativelanguage.googleapis.com")
 
+    def test_extract_byok_config_default_provider_base(self):
+        import os
+        for k in ["BYOK_PROVIDER", "BYOK_API_KEY", "BYOK_MODEL", "BYOK_API_BASE"]:
+            os.environ.pop(k, None)
+
+        config_ollama = extract_byok_config(headers={"x-byok-provider": "ollama"})
+        self.assertEqual(config_ollama.api_base, "http://localhost:11434")
+
+        config_custom = extract_byok_config(headers={"x-byok-provider": "custom"})
+        self.assertEqual(config_custom.api_base, "http://localhost:8000/v1")
+
     def test_format_litellm_model(self):
         cfg_openai = BYOKConfig(provider="openai", model="gpt-4o")
         self.assertEqual(format_litellm_model(cfg_openai), "openai/gpt-4o")
