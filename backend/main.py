@@ -642,6 +642,26 @@ def encode_image(image_path: str) -> str:
         return base64.b64encode(image_file.read()).decode("utf-8")
 
 
+def _truncate_repeated_lines(lines: List[str], max_period: int = 10) -> List[str]:
+    """Cut output at the point where a block of lines starts repeating verbatim.
+
+    glm-ocr degenerates into whole-block loops (A,B,C,A,B,C,...); the old
+    adjacent-line dedupe only caught single-line repeats.
+    """
+    out: List[str] = []
+    for line in lines:
+        candidate = out + [line]
+        for period in range(1, min(max_period, len(candidate) // 2) + 1):
+            if candidate[-period:] == candidate[-2 * period:-period]:
+                if period == 1:
+                    break  # adjacent duplicate — drop the line, keep scanning
+                # multi-line block loop completed — cut here, rest is degeneration
+                return candidate[:-period]
+        else:
+            out.append(line)
+    return out
+
+
 async def perform_ocr(image_path: str) -> str:
     """Call Ollama glm-ocr for text extraction"""
     try:
@@ -651,14 +671,37 @@ async def perform_ocr(image_path: str) -> str:
             "prompt": "Text Recognition: OCR the speech bubbles in this manga page. Output only the extracted text lines.",
             "images": [base64_image],
             "stream": False,
-            "options": {"num_ctx": 16384},
+            # ponytail: glm-ocr degenerates into endless ``` fences without a cap;
+            # raise OCR_NUM_PREDICT only if long pages get truncated
+            "options": {
+                "num_ctx": 16384,
+                "num_predict": int(os.getenv("OCR_NUM_PREDICT", "512")),
+                # anti-repetition: glm-ocr loops verbatim blocks (A-B-C-A-B-C...)
+                "repeat_penalty": float(os.getenv("OCR_REPEAT_PENALTY", "1.15")),
+                "repeat_last_n": int(os.getenv("OCR_REPEAT_LAST_N", "256")),
+            },
+            # stop at first markdown fence — glm-ocr wraps output in ``` and loops
+            "stop": ["\n```"],
         }
 
         async with get_ocr_semaphore():
             async with httpx.AsyncClient(timeout=httpx.Timeout(OCR_TIMEOUT, connect=15.0)) as client:
                 response = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
                 response.raise_for_status()
-                ocr_text = response.json().get("response", "")
+                raw_text = response.json().get("response", "")
+                # glm-ocr outputs correct text then wraps it in ``` fences and loops;
+                # truncate at the first fence — everything before it is the real OCR result
+                fence_idx = raw_text.find("\n```")
+                if fence_idx != -1:
+                    raw_text = raw_text[:fence_idx]
+                # drop empty / fence-only lines, then cut verbatim block loops
+                raw_lines = [
+                    stripped
+                    for line in raw_text.splitlines()
+                    if (stripped := line.strip()) and not stripped.startswith("```")
+                ]
+                cleaned_lines = _truncate_repeated_lines(raw_lines)
+                ocr_text = "\n".join(cleaned_lines)
                 if (
                     isinstance(ocr_text, str)
                     and ocr_text.strip().startswith("Error during OCR:")
