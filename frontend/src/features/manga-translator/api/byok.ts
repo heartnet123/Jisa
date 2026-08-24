@@ -60,7 +60,7 @@ export function getBYOKHeaders(customConfig?: BYOKConfig | null): Record<string,
   return headers;
 }
 
-const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL?.trim() || "http://localhost:8000").replace(/\/+$/, "");
+const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL?.trim() ?? "").replace(/\/+$/, "");
 
 export async function fetchBYOKProviders(): Promise<ProviderTemplate[]> {
   try {
