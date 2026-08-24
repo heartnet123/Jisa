@@ -8,7 +8,7 @@ import os
 import re
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Set
+from typing import Any, Dict, List, Literal, Optional, Set
 from fastapi.responses import StreamingResponse
 
 
@@ -67,6 +67,16 @@ app.add_middleware(
 # Constants
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OCR_MODEL = os.getenv("OCR_MODEL", "glm-ocr")
+OCR_TIMEOUT = float(os.getenv("OCR_TIMEOUT", "180.0"))
+OCR_CONCURRENCY = max(1, int(os.getenv("OCR_CONCURRENCY", "2")))
+_ocr_semaphore: Optional[asyncio.Semaphore] = None
+
+
+def get_ocr_semaphore() -> asyncio.Semaphore:
+    global _ocr_semaphore
+    if _ocr_semaphore is None:
+        _ocr_semaphore = asyncio.Semaphore(OCR_CONCURRENCY)
+    return _ocr_semaphore
 BYOK_API_KEY = os.getenv("BYOK_API_KEY")
 BYOK_API_BASE = os.getenv("BYOK_API_BASE", "https://api.openai.com/v1")
 BYOK_MODEL = os.getenv("BYOK_MODEL", "gpt-5.4-mini")
@@ -644,16 +654,17 @@ async def perform_ocr(image_path: str) -> str:
             "options": {"num_ctx": 16384},
         }
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
-            response.raise_for_status()
-            ocr_text = response.json().get("response", "")
-            if (
-                isinstance(ocr_text, str)
-                and ocr_text.strip().startswith("Error during OCR:")
-            ):
-                raise OcrError(ocr_failure_message(ocr_text))
-            return ocr_text
+        async with get_ocr_semaphore():
+            async with httpx.AsyncClient(timeout=httpx.Timeout(OCR_TIMEOUT, connect=15.0)) as client:
+                response = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
+                response.raise_for_status()
+                ocr_text = response.json().get("response", "")
+                if (
+                    isinstance(ocr_text, str)
+                    and ocr_text.strip().startswith("Error during OCR:")
+                ):
+                    raise OcrError(ocr_failure_message(ocr_text))
+                return ocr_text
     except OcrError:
         raise
     except Exception as e:
