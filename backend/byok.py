@@ -62,7 +62,7 @@ PRESET_PROVIDERS = [
         "name": "Ollama (Local)",
         "default_model": "llama3.3",
         "models": ["llama3.3", "llama3.2", "qwen2.5-coder", "deepseek-r1:8b", "mistral", "gemma2"],
-        "default_base": os.getenv("OLLAMA_URL", "http://localhost:11434"),
+        "default_base": (os.getenv("OLLAMA_URL", "").strip() or "http://localhost:11434"),
         "requires_key": False,
     },
     {
@@ -70,13 +70,13 @@ PRESET_PROVIDERS = [
         "name": "Custom OpenAI-Compatible",
         "default_model": "default",
         "models": ["default"],
-        "default_base": os.getenv("CUSTOM_PROVIDER_BASE", "http://localhost:8000/v1"),
+        "default_base": (os.getenv("CUSTOM_PROVIDER_BASE", "").strip() or "http://localhost:8000/v1"),
         "requires_key": False,
     },
 ]
 
 
-DEFAULT_FALLBACK_MODEL = os.getenv("BYOK_DEFAULT_MODEL", "gpt-5.4-mini")
+DEFAULT_FALLBACK_MODEL = (os.getenv("BYOK_DEFAULT_MODEL", "").strip() or "gpt-5.4-mini")
 
 
 def get_provider_default_model(provider: str) -> str:
