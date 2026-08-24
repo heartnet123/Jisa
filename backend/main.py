@@ -109,7 +109,7 @@ PAGE_CONTEXT_TRANSLATION = os.getenv("PAGE_CONTEXT_TRANSLATION", "true").lower()
 }
 TYPESETTING_FONT = os.getenv("TYPESETTING_FONT")
 
-UPLOAD_DIR = Path("uploads")
+UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "uploads"))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 MASK_DIR = UPLOAD_DIR / "masks"
 MASK_DIR.mkdir(parents=True, exist_ok=True)
@@ -2143,6 +2143,7 @@ async def stream_events():
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
 
 
