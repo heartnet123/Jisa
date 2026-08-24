@@ -288,39 +288,52 @@ class SQLiteReviewRepository:
                         if "padding_ratio" not in regions_columns:
                             self._connection.execute("ALTER TABLE regions ADD COLUMN padding_ratio REAL NOT NULL DEFAULT 0.10")
 
-                        self._connection.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
+                        self._connection.execute("PRAGMA user_version = 3")
                     except Exception:
                         self._connection.rollback()
                         raise
                     else:
                         self._connection.commit()
+                    version = 3
 
                 if version == 3:
                     # Legacy DBs created projects with NOT NULL on the json columns;
                     # save_project no longer writes them. Rebuild nullable, keep rows.
                     self._connection.execute("BEGIN IMMEDIATE")
                     try:
-                        self._connection.executescript(
-                            """
-                            CREATE TABLE projects_new (
-                                id TEXT PRIMARY KEY,
-                                name TEXT NOT NULL,
-                                created_at TEXT NOT NULL,
-                                job_ids_json TEXT,
-                                page_order_json TEXT
-                            );
-                            INSERT INTO projects_new (id, name, created_at, job_ids_json, page_order_json)
-                                SELECT id, name, created_at, job_ids_json, page_order_json FROM projects;
-                            DROP TABLE projects;
-                            ALTER TABLE projects_new RENAME TO projects;
-                            PRAGMA user_version = 4;
-                            """
-                        )
+                        table_names = {
+                            row[0]
+                            for row in self._connection.execute(
+                                "SELECT name FROM sqlite_master WHERE type = 'table'"
+                            ).fetchall()
+                        }
+                        if "projects" in table_names:
+                            self._connection.execute(
+                                """
+                                CREATE TABLE projects_new (
+                                    id TEXT PRIMARY KEY,
+                                    name TEXT NOT NULL,
+                                    created_at TEXT NOT NULL,
+                                    job_ids_json TEXT,
+                                    page_order_json TEXT
+                                )
+                                """
+                            )
+                            self._connection.execute(
+                                """
+                                INSERT INTO projects_new (id, name, created_at, job_ids_json, page_order_json)
+                                    SELECT id, name, created_at, job_ids_json, page_order_json FROM projects
+                                """
+                            )
+                            self._connection.execute("DROP TABLE projects")
+                            self._connection.execute("ALTER TABLE projects_new RENAME TO projects")
+                        self._connection.execute("PRAGMA user_version = 4")
                     except Exception:
                         self._connection.rollback()
                         raise
                     else:
                         self._connection.commit()
+                    version = 4
 
     @staticmethod
     def _json_list_or_empty(raw: Any) -> list[str]:

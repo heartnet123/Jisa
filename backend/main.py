@@ -679,9 +679,9 @@ async def perform_ocr(image_path: str) -> str:
                 # anti-repetition: glm-ocr loops verbatim blocks (A-B-C-A-B-C...)
                 "repeat_penalty": float(os.getenv("OCR_REPEAT_PENALTY", "1.15")),
                 "repeat_last_n": int(os.getenv("OCR_REPEAT_LAST_N", "256")),
+                # stop at first markdown fence — glm-ocr wraps output in ``` and loops
+                "stop": ["\n```"],
             },
-            # stop at first markdown fence — glm-ocr wraps output in ``` and loops
-            "stop": ["\n```"],
         }
 
         async with get_ocr_semaphore():
