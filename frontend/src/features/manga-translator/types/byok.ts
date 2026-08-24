@@ -90,7 +90,7 @@ export const DEFAULT_PROVIDERS: ProviderTemplate[] = [
     name: "Ollama (Local)",
     default_model: "llama3.3",
     models: ["llama3.3", "llama3.2", "qwen2.5-coder", "deepseek-r1:8b", "mistral", "gemma2"],
-    default_base: "http://localhost:11434",
+    default_base: process.env.NEXT_PUBLIC_OLLAMA_URL || "http://localhost:11434",
     requires_key: false,
   },
   {
@@ -98,7 +98,9 @@ export const DEFAULT_PROVIDERS: ProviderTemplate[] = [
     name: "Custom OpenAI-Compatible",
     default_model: "default",
     models: ["default"],
-    default_base: "http://localhost:8000/v1",
+    default_base: process.env.NEXT_PUBLIC_API_BASE_URL
+      ? `${process.env.NEXT_PUBLIC_API_BASE_URL}/v1`
+      : "http://localhost:8000/v1",
     requires_key: false,
   },
 ];
