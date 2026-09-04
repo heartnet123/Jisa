@@ -62,7 +62,7 @@ PRESET_PROVIDERS = [
         "name": "Ollama (Local)",
         "default_model": "llama3.3",
         "models": ["llama3.3", "llama3.2", "qwen2.5-coder", "deepseek-r1:8b", "mistral", "gemma2"],
-        "default_base": "http://localhost:11434",
+        "default_base": (os.getenv("OLLAMA_URL", "").strip() or "http://localhost:11434"),
         "requires_key": False,
     },
     {
@@ -70,13 +70,13 @@ PRESET_PROVIDERS = [
         "name": "Custom OpenAI-Compatible",
         "default_model": "default",
         "models": ["default"],
-        "default_base": "http://localhost:8000/v1",
+        "default_base": (os.getenv("CUSTOM_PROVIDER_BASE", "").strip() or "http://localhost:8000/v1"),
         "requires_key": False,
     },
 ]
 
 
-DEFAULT_FALLBACK_MODEL = "gpt-5.4-mini"
+DEFAULT_FALLBACK_MODEL = (os.getenv("BYOK_DEFAULT_MODEL", "").strip() or "gpt-5.4-mini")
 
 
 def get_provider_default_model(provider: str) -> str:
@@ -85,6 +85,14 @@ def get_provider_default_model(provider: str) -> str:
         if prov["id"] == p_lower:
             return prov["default_model"]
     return DEFAULT_FALLBACK_MODEL
+
+
+def get_provider_default_base(provider: str) -> Optional[str]:
+    p_lower = provider.lower()
+    for prov in PRESET_PROVIDERS:
+        if prov["id"] == p_lower:
+            return prov.get("default_base")
+    return None
 
 
 class BYOKConfig(BaseModel):
@@ -114,8 +122,8 @@ def extract_byok_config(request: Optional[Request] = None, headers: Optional[Dic
     # Clean up empty strings or placeholders
     if api_key in ["", "your_api_key_here"]:
         api_key = None
-    if api_base == "":
-        api_base = None
+    if not api_base or api_base.strip() == "":
+        api_base = get_provider_default_base(provider)
 
     return BYOKConfig(
         provider=provider.lower(),

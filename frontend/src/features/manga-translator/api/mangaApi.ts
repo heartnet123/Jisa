@@ -15,8 +15,7 @@ import type {
 
 import { getBYOKHeaders } from "./byok";
 
-export const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+export const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL?.trim() ?? "").replace(/\/+$/, "");
 
 export interface UploadResponse {
   id: string;
@@ -24,7 +23,7 @@ export interface UploadResponse {
 }
 
 /** Prepend the backend origin to any relative /uploads/ path the API returns. */
-function resolveUrl(url: string | undefined): string | undefined {
+export function resolveUrl(url: string | undefined): string | undefined {
   if (!url) return undefined;
   if (url.startsWith("/")) return `${API_BASE_URL}${url}`;
   return url;

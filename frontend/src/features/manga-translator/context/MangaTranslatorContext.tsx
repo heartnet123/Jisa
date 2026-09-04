@@ -1,7 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { mangaApi, API_BASE_URL } from '../api/mangaApi';
+import { mangaApi, API_BASE_URL, resolveUrl } from '../api/mangaApi';
 import type { ProcessedManga, TranslationConfig, Project, SystemHealth } from '../types';
 import { getBYOKConfig } from '../api/byok';
 
@@ -158,12 +158,6 @@ export const MangaTranslatorProvider: React.FC<{ children: React.ReactNode }> = 
   useEffect(() => {
     const eventSource = new EventSource(`${API_BASE_URL}/api/stream/events`);
 
-    const resolveUrl = (url: string | undefined): string | undefined => {
-      if (!url) return undefined;
-      if (url.startsWith("/")) return `${API_BASE_URL}${url}`;
-      return url;
-    };
-
     eventSource.onopen = () => {
       setSseStatus('connected');
     };
@@ -308,8 +302,8 @@ export const MangaTranslatorProvider: React.FC<{ children: React.ReactNode }> = 
 
           const newManga: ProcessedManga = {
             ...job,
-            originalUrl: job.originalUrl || job.original_url || localUrl || '',
-            original_url: job.original_url || localUrl || '',
+            originalUrl: resolveUrl(job.originalUrl) ?? resolveUrl(job.original_url) ?? localUrl ?? '',
+            original_url: resolveUrl(job.original_url) ?? localUrl ?? '',
             status: job.status || 'queued',
             progress: job.progress ?? 5,
             message: job.message || 'Queued for processing.',

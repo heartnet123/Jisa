@@ -14,6 +14,7 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock("../api/mangaApi", () => ({
   API_BASE_URL: "http://localhost:8000",
+  resolveUrl: (url?: string) => (url ? (url.startsWith("/") ? `http://localhost:8000${url}` : url) : undefined),
   mangaApi: apiMocks,
 }));
 

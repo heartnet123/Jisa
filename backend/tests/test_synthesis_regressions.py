@@ -185,6 +185,12 @@ class OcrErrorHandlingTests(unittest.TestCase):
         self.assertIn("Translation stopped before the next stage.", message)
         self.assertIn("connection refused", message)
 
+    def test_ocr_semaphore_initialization(self) -> None:
+        from main import get_ocr_semaphore, OCR_CONCURRENCY
+        sem = get_ocr_semaphore()
+        self.assertIsNotNone(sem)
+        self.assertGreaterEqual(OCR_CONCURRENCY, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

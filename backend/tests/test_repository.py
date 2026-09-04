@@ -403,7 +403,7 @@ class SQLiteReviewRepositoryTests(unittest.TestCase):
             conn.close()
 
             repo = SQLiteReviewRepository(database_path)
-            self.assertEqual(repo._connection.execute("PRAGMA user_version").fetchone()[0], 3)
+            self.assertEqual(repo._connection.execute("PRAGMA user_version").fetchone()[0], SQLiteReviewRepository.SCHEMA_VERSION)
             table_names = {
                 row["name"]
                 for row in repo._connection.execute(
@@ -539,6 +539,89 @@ class SQLiteReviewRepositoryTests(unittest.TestCase):
         plan_str = " ".join(str(dict(r)) for r in plan_rows)
         self.assertTrue("jobs_project_sequence_idx" in plan_str or "jobs_project_id_idx" in plan_str)
         repo.close()
+
+    def test_migration_from_v2_to_v4_cascades_and_preserves_nullable_projects(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            database_path = Path(temporary_directory) / "v2_db.sqlite3"
+            conn = sqlite3.connect(str(database_path))
+            conn.execute(
+                """
+                CREATE TABLE projects (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    job_ids_json TEXT NOT NULL DEFAULT '[]',
+                    page_order_json TEXT NOT NULL DEFAULT '[]'
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE jobs (
+                    id TEXT PRIMARY KEY,
+                    filename TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    progress INTEGER NOT NULL,
+                    message TEXT,
+                    original_url TEXT NOT NULL,
+                    result_url TEXT,
+                    mask_url TEXT,
+                    ocr_text TEXT,
+                    translated_text TEXT,
+                    error TEXT,
+                    created_at TEXT NOT NULL,
+                    project_id TEXT NOT NULL,
+                    sequence_id INTEGER,
+                    image_width INTEGER,
+                    image_height INTEGER,
+                    region_mode TEXT NOT NULL DEFAULT 'detected',
+                    font_family TEXT,
+                    font_size INTEGER,
+                    font_color TEXT,
+                    stroke_color TEXT,
+                    stroke_width INTEGER,
+                    line_spacing REAL,
+                    vertical INTEGER,
+                    FOREIGN KEY (project_id) REFERENCES projects(id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE regions (
+                    id TEXT PRIMARY KEY,
+                    job_id TEXT NOT NULL,
+                    "order" INTEGER NOT NULL,
+                    x REAL NOT NULL,
+                    y REAL NOT NULL,
+                    width REAL NOT NULL,
+                    height REAL NOT NULL,
+                    source TEXT NOT NULL,
+                    source_text TEXT,
+                    translated_text TEXT,
+                    mask_path TEXT,
+                    FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+                )
+                """
+            )
+            conn.execute("INSERT INTO projects (id, name, created_at, job_ids_json, page_order_json) VALUES ('p-old', 'Legacy Proj', '2026-01-01T00:00:00Z', '[]', '[]')")
+            conn.execute("PRAGMA user_version = 2")
+            conn.commit()
+            conn.close()
+
+            repo = SQLiteReviewRepository(database_path)
+            version = repo._connection.execute("PRAGMA user_version").fetchone()[0]
+            self.assertEqual(version, 4)
+
+            repo.save_project({"id": "p-old", "name": "Legacy Proj Updated", "created_at": "2026-01-01T00:00:00Z"})
+            projects = repo.load_projects()
+            self.assertEqual(len(projects), 1)
+            self.assertEqual(projects[0]["name"], "Legacy Proj Updated")
+
+            regions_cols = repo._table_columns("regions")
+            self.assertIn("font_name", regions_cols)
+            self.assertIn("auto_fit", regions_cols)
+            repo.close()
 
 
 if __name__ == "__main__":
