@@ -7,11 +7,6 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
-# Ring std (0-255) at or below this counts as a "flat" background (plain white
-# bubble interior). Flat regions are filled with the surrounding median colour
-# instead of running LaMa, which guarantees zero texture damage there.
-FLAT_STD_THRESHOLD = 14.0
-
 
 def _try_import_lama():
     """Lazy import so the server still boots if simple-lama-inpainting is not installed."""
@@ -65,10 +60,7 @@ class InpaintingEngine:
         With `safe_zones` (one per mask, usually eroded bubble interiors):
         - each mask is dilated stroke-adaptively and CLIPPED to its zone, so
           the bubble outline and the artwork outside it are never modified
-        - masks sitting on a flat background (plain white interior) are filled
-          with the surrounding median colour instead of running LaMa — zero
-          texture damage there
-        - the rest go through a single LaMa pass (cleaner seams than N passes)
+        - combined mask is processed in a single inpainting pass
 
         Args:
             image_np:    RGB uint8 image [H, W, 3].
@@ -85,36 +77,17 @@ class InpaintingEngine:
         if not masks:
             return image_np.copy()
 
-        zones = (
-            list(safe_zones)
-            if safe_zones and len(safe_zones) == len(masks)
-            else [None] * len(masks)
+        combined = self._combine_masks(
+            image_np.shape[:2],
+            masks,
+            dilation_px=dilation_px,
+            safe_zones=safe_zones,
         )
 
-        out = image_np.copy()
-        lama_masks: list[np.ndarray] = []
+        if not combined.any():
+            return image_np.copy()
 
-        for text_mask, zone in zip(masks, zones):
-            fat = self._expand_mask(text_mask, zone)
-            if not fat.any():
-                continue
-
-            median_color, ring_std = self._ring_stats(image_np, fat, zone)
-            if ring_std is not None and ring_std <= FLAT_STD_THRESHOLD:
-                # Flat background → solid fill; no generative model involved.
-                layer = image_np.copy()
-                layer[fat > 0] = median_color
-                out = self._composite_inpainted(out, layer, fat, feather_px=2)
-            else:
-                lama_masks.append(fat)
-
-        if not lama_masks:
-            return out
-
-        combined = np.zeros(image_np.shape[:2], dtype=np.uint8)
-        for fat in lama_masks:
-            combined = cv2.bitwise_or(combined, fat)
-        return self._inpaint(out, combined)
+        return self._inpaint(image_np, combined)
 
     @staticmethod
     def _expand_mask(
@@ -146,42 +119,6 @@ class InpaintingEngine:
         if zone is not None:
             fat[zone == 0] = 0
         return fat
-
-    @staticmethod
-    def _ring_stats(
-        image_np: np.ndarray,
-        fat_mask: np.ndarray,
-        zone: np.ndarray | None,
-    ) -> tuple[np.ndarray | None, float | None]:
-        """
-        Median RGB colour and std of the pixels ringing the erase region.
-
-        Used to decide whether the local background is flat (uniform white
-        bubble interior) — those regions are safe to fill with the median
-        colour instead of asking LaMa to invent texture.
-        """
-        outer = cv2.dilate(
-            fat_mask,
-            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13)),
-            iterations=1,
-        )
-        inner = cv2.dilate(
-            fat_mask,
-            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
-            iterations=1,
-        )
-        ring = cv2.bitwise_and(outer, cv2.bitwise_not(inner))
-        if zone is not None:
-            ring[zone == 0] = 0
-
-        pixels = image_np[ring > 0]
-        if pixels.size < 90:
-            # Too few samples to judge flatness — let LaMa handle it safely.
-            return None, None
-
-        median_color = np.median(pixels, axis=0).astype(np.uint8)
-        std = float(pixels.astype(np.float32).std())
-        return median_color, std
 
     def build_text_masks(
         self,
