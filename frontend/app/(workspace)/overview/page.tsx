@@ -1,16 +1,17 @@
 'use client';
 
 import React from 'react';
+import { useRouter } from 'next/navigation';
 import { Icon } from '@iconify-icon/react';
 import { motion } from 'framer-motion';
 import Link from 'next/link';
 import { useMangaTranslator } from '@/features/manga-translator/context/MangaTranslatorContext';
 
 export default function OverviewPage() {
+  const router = useRouter();
   const {
     files,
     projects,
-    setActiveHITLItem,
     healthLoading,
     loadInitialData
   } = useMangaTranslator();
@@ -179,7 +180,7 @@ export default function OverviewPage() {
                           </div>
                         </div>
                         <button
-                          onClick={() => setActiveHITLItem(file)}
+                          onClick={() => router.push(`/editor/${file.id}?from=/overview`)}
                           className="px-3 py-1.5 bg-yellow-500 hover:bg-yellow-400 text-black font-bold font-mono text-[10px] uppercase rounded transition-all shrink-0 cursor-pointer"
                         >
                           REVIEW

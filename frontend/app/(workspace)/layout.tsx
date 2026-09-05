@@ -5,11 +5,10 @@ import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { Icon } from '@iconify-icon/react';
 import { useMangaTranslator } from '@/features/manga-translator/context/MangaTranslatorContext';
-import { TranslationEditor } from '@/features/manga-translator/components/TranslationEditor';
 
 export default function WorkspaceLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const { files, projects, systemHealth, activeHITLItem, setActiveHITLItem, handleUpdate, sseStatus, bootstrapError } = useMangaTranslator();
+  const { files, projects, systemHealth, sseStatus, bootstrapError } = useMangaTranslator();
 
 
 
@@ -161,14 +160,6 @@ export default function WorkspaceLayout({ children }: { children: React.ReactNod
         )}
         {children}
       </main>
-
-      {activeHITLItem && (
-        <TranslationEditor
-          item={activeHITLItem}
-          onClose={() => setActiveHITLItem(null)}
-          onUpdate={handleUpdate}
-        />
-      )}
     </div>
   );
 }

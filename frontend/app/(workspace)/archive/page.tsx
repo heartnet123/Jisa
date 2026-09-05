@@ -1,16 +1,17 @@
 'use client';
 
 import React, { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Icon } from '@iconify-icon/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useMangaTranslator } from '@/features/manga-translator/context/MangaTranslatorContext';
 import type { ProcessedManga } from '@/features/manga-translator/types';
 
 export default function ArchivePage() {
+  const router = useRouter();
   const {
     files,
     handleRemove,
-    setActiveHITLItem,
     healthLoading,
     loadInitialData
   } = useMangaTranslator();
@@ -147,7 +148,7 @@ export default function ArchivePage() {
                                   setInspectItem(file);
                                   setInspectMode('translated');
                                 } else if (isAwaitingReview) {
-                                  setActiveHITLItem(file);
+                                  router.push(`/editor/${file.id}?from=/archive`);
                                 }
                               }}
                             >
@@ -210,7 +211,7 @@ export default function ArchivePage() {
                             <div className="flex gap-2 justify-end">
                               {isAwaitingReview && (
                                 <button
-                                  onClick={() => setActiveHITLItem(file)}
+                                  onClick={() => router.push(`/editor/${file.id}?from=/archive`)}
                                   className="px-2.5 py-1.5 bg-yellow-500 hover:bg-yellow-400 text-black border border-yellow-500 rounded font-bold uppercase tracking-wider text-[8px] font-mono flex items-center gap-1 cursor-pointer transition-colors shadow-sm"
                                   title="Launch Studio editor"
                                 >
