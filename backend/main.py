@@ -2,32 +2,38 @@ import asyncio
 import base64
 import io
 import json
-import threading
 import math
 import os
 import re
+import threading
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Set
-from fastapi.responses import StreamingResponse
-
+from typing import Any, Literal
 
 import cv2
 import httpx
 import numpy as np
 import uvicorn
+from byok import PRESET_PROVIDERS, BYOKConfig, byok_completion, extract_byok_config
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile, Form, Request
+from fastapi import (
+    BackgroundTasks,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-
 from job_errors import OcrError, ocr_failure_message
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from repository import RegionRecord, ReviewRepository, SQLiteReviewRepository
 from synthesis.inpainting import InpaintingEngine
-from synthesis.segmentation import TextBlock, SegmentationEngine
+from synthesis.segmentation import SegmentationEngine, TextBlock
 from synthesis.typesetting import TypesetBlock, TypesettingEngine
-from byok import BYOKConfig, extract_byok_config, byok_completion, PRESET_PROVIDERS
 
 # Load configurations
 load_dotenv()
@@ -37,7 +43,7 @@ app = FastAPI(title="AI Manga Translator API")
 # Event Manager for Server-Sent Events (SSE)
 class EventManager:
     def __init__(self):
-        self.listeners: Set[asyncio.Queue] = set()
+        self.listeners: set[asyncio.Queue] = set()
 
     def subscribe(self) -> asyncio.Queue:
         queue = asyncio.Queue()
@@ -69,7 +75,7 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OCR_MODEL = os.getenv("OCR_MODEL", "glm-ocr")
 OCR_TIMEOUT = float(os.getenv("OCR_TIMEOUT", "180.0"))
 OCR_CONCURRENCY = max(1, int(os.getenv("OCR_CONCURRENCY", "2")))
-_ocr_semaphore: Optional[asyncio.Semaphore] = None
+_ocr_semaphore: asyncio.Semaphore | None = None
 
 
 def get_ocr_semaphore() -> asyncio.Semaphore:
@@ -139,8 +145,8 @@ MAX_BATCH_UPLOAD_FILES = int(os.getenv("MAX_BATCH_UPLOAD_FILES", "20"))
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
 # In-memory store
-jobs_db: Dict[str, dict] = {}
-projects_db: Dict[str, dict] = {}
+jobs_db: dict[str, dict] = {}
+projects_db: dict[str, dict] = {}
 repository: ReviewRepository = SQLiteReviewRepository(STATE_DB_PATH)
 
 # Initialize Synthesis Engines
@@ -242,7 +248,7 @@ def _mask_path_for(job_id: str, block_id: str) -> Path:
     return MASK_DIR / f"{job_id}_{safe_block_id}.png"
 
 
-def _persist_runtime_regions(job_id: str, blocks: List[TextBlock]) -> None:
+def _persist_runtime_regions(job_id: str, blocks: list[TextBlock]) -> None:
     job = jobs_db[job_id]
     image_width = int(job["image_width"])
     image_height = int(job["image_height"])
@@ -460,7 +466,7 @@ class BatchTranslateJobItem(BaseModel):
 class TranslateJobResponse(BaseModel):
     id: str
     status: str
-    jobs: List[BatchTranslateJobItem] | None = None
+    jobs: list[BatchTranslateJobItem] | None = None
 
 
 class NormalizedBox(BaseModel):
@@ -515,7 +521,7 @@ class RegionMutation(BaseModel):
 
 
 class ReplaceRegionsPayload(BaseModel):
-    regions: List[RegionMutation]
+    regions: list[RegionMutation]
 
     @model_validator(mode="after")
     def validate_unique_ids(self) -> "ReplaceRegionsPayload":
@@ -555,11 +561,11 @@ class FloatRange(BaseModel):
 
 
 class TypesettingOptionsResponse(BaseModel):
-    fonts: List[TypesettingFontItem]
+    fonts: list[TypesettingFontItem]
     default_font_name: str | None = None
     font_size: IntRange
     padding_ratio: FloatRange
-    alignments: List[str]
+    alignments: list[str]
 
 
 class TypesetPreviewRequest(BaseModel):
@@ -580,7 +586,7 @@ class TypesetPreviewResponse(BaseModel):
     mime_type: str = "image/png"
     overlay_base64: str
     bounds_px: TypesetPreviewBounds
-    lines: List[str]
+    lines: list[str]
     requested_font_size: int | None = None
     resolved_font_size: int
     auto_shrunk: bool
@@ -590,7 +596,7 @@ class TypesetPreviewResponse(BaseModel):
 
 class RegionCollectionResponse(BaseModel):
     region_mode: Literal["detected", "manual_override"]
-    regions: List[BlockItem]
+    regions: list[BlockItem]
 
 
 class MaskPreviewResponse(BaseModel):
@@ -599,7 +605,7 @@ class MaskPreviewResponse(BaseModel):
 
 
 class ApprovePayload(BaseModel):
-    translations: Dict[str, str]
+    translations: dict[str, str]
 
 
 class JobStatus(BaseModel):
@@ -612,7 +618,7 @@ class JobStatus(BaseModel):
     result_url: str | None = None
     original_url: str | None = None
     inpainted_url: str | None = None
-    blocks: List[BlockItem] | None = None
+    blocks: list[BlockItem] | None = None
     project_id: str | None = None
     sequence_id: int | None = None
     region_mode: Literal["detected", "manual_override"] = "detected"
@@ -628,12 +634,12 @@ class ProjectResponse(BaseModel):
     id: str
     name: str
     created_at: str
-    job_ids: List[str]
-    page_order: List[str]
+    job_ids: list[str]
+    page_order: list[str]
 
 
 class ReorderPayload(BaseModel):
-    page_order: List[str]
+    page_order: list[str]
 
 
 
@@ -642,13 +648,13 @@ def encode_image(image_path: str) -> str:
         return base64.b64encode(image_file.read()).decode("utf-8")
 
 
-def _truncate_repeated_lines(lines: List[str], max_period: int = 10) -> List[str]:
+def _truncate_repeated_lines(lines: list[str], max_period: int = 10) -> list[str]:
     """Cut output at the point where a block of lines starts repeating verbatim.
 
     glm-ocr degenerates into whole-block loops (A,B,C,A,B,C,...); the old
     adjacent-line dedupe only caught single-line repeats.
     """
-    out: List[str] = []
+    out: list[str] = []
     for line in lines:
         candidate = out + [line]
         for period in range(1, min(max_period, len(candidate) // 2) + 1):
@@ -729,7 +735,7 @@ async def translate_text(text: str, byok_config: BYOKConfig | None = None) -> st
         return await byok_completion(messages=messages, config=config)
     except Exception as e:
         print(f"Translation Error: {e}")
-        return f"Error during Translation: {str(e)}"
+        return f"Error during Translation: {e!s}"
 
 
 def _extract_json_object(raw_text: str) -> dict | None:
@@ -753,7 +759,7 @@ def _extract_json_object(raw_text: str) -> dict | None:
         return None
 
 
-async def translate_page_texts(texts: List[str], byok_config: BYOKConfig | None = None) -> List[str]:
+async def translate_page_texts(texts: list[str], byok_config: BYOKConfig | None = None) -> list[str]:
     """
     Translate all bubble texts together so the model can keep page-level context.
     Falls back to per-bubble mode if structured parsing fails.
@@ -882,7 +888,7 @@ async def process_manga_task(job_id: str, image_path: str, byok_config: BYOKConf
             ocr_tasks = [
                 _crop_and_ocr(img_rgb, b.box, image_path, job_id) for b in blocks
             ]
-            bubble_texts: List[str] = await asyncio.gather(*ocr_tasks)
+            bubble_texts: list[str] = await asyncio.gather(*ocr_tasks)
             # Assign extracted text back to each block
             for block, raw_text in zip(blocks, bubble_texts):
                 block.text = raw_text.strip()
@@ -969,7 +975,7 @@ async def process_manga_task(job_id: str, image_path: str, byok_config: BYOKConf
 
 
 async def resume_manga_task(
-    job_id: str, image_path: str, blocks: List[TextBlock] | None = None
+    job_id: str, image_path: str, blocks: list[TextBlock] | None = None
 ):
     """Real AI Pipeline Step 4-6: Inpainting -> Typesetting -> Completed"""
     try:
@@ -1008,10 +1014,14 @@ async def resume_manga_task(
                 fallback[y : y + h, x : x + w] = 1
                 bubble_masks.append(fallback)
 
-        masks = inpainter.build_text_masks(img_rgb, bubble_masks)
+        text_pairs = inpainter.build_text_masks(img_rgb, bubble_masks)
+        text_masks = [m for m, _ in text_pairs]
+        safe_zones = [z for _, z in text_pairs]
 
-        if masks:
-            inpainted_img = inpainter.process_blocks(img_rgb, masks)
+        if text_masks:
+            inpainted_img = inpainter.process_blocks(
+                img_rgb, text_masks, safe_zones=safe_zones
+            )
         else:
             # Nothing to inpaint — use original image as-is
             print(
@@ -1315,7 +1325,7 @@ async def test_byok_connection(request: Request, payload: BYOKTestRequest | None
     except Exception as e:
         raise HTTPException(
             status_code=400,
-            detail=f"Connection test failed for provider '{config.provider}': {str(e)}",
+            detail=f"Connection test failed for provider '{config.provider}': {e!s}",
         )
 
 
@@ -1700,9 +1710,12 @@ async def generate_mask_preview(job_id: str) -> MaskPreviewResponse:
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
     blocks = hydrate_engine_blocks(job, regions)
     bubble_masks = [block.mask for block in blocks if block.mask is not None]
-    text_masks = inpainter.build_text_masks(image_rgb, bubble_masks)
+    text_pairs = inpainter.build_text_masks(image_rgb, bubble_masks)
     combined_mask = inpainter._combine_masks(
-        image_rgb.shape[:2], text_masks, dilation_px=12
+        image_rgb.shape[:2],
+        [m for m, _ in text_pairs],
+        dilation_px=12,
+        safe_zones=[z for _, z in text_pairs],
     )
 
     overlay = np.zeros((*image_rgb.shape[:2], 4), dtype=np.uint8)
@@ -1876,7 +1889,7 @@ async def create_project(payload: ProjectCreatePayload):
     return project
 
 
-@app.get("/api/projects", response_model=List[ProjectResponse])
+@app.get("/api/projects", response_model=list[ProjectResponse])
 async def list_projects():
     db_projects = repository.load_projects()
     for proj in db_projects:
@@ -1978,8 +1991,7 @@ async def delete_project(project_id: str, background_tasks: BackgroundTasks):
     for jid in job_ids_to_del:
         del jobs_db[jid]
 
-    if project_id in projects_db:
-        del projects_db[project_id]
+    projects_db.pop(project_id, None)
 
     failed_paths = []
     for path in asset_paths:

@@ -1,12 +1,16 @@
 import gc
 import logging
-from typing import List
 
 import cv2
 import numpy as np
 from PIL import Image
 
 logger = logging.getLogger(__name__)
+
+# Ring std (0-255) at or below this counts as a "flat" background (plain white
+# bubble interior). Flat regions are filled with the surrounding median colour
+# instead of running LaMa, which guarantees zero texture damage there.
+FLAT_STD_THRESHOLD = 14.0
 
 
 def _try_import_lama():
@@ -51,20 +55,29 @@ class InpaintingEngine:
     def process_blocks(
         self,
         image_np: np.ndarray,
-        masks: List[np.ndarray],
+        masks: list[np.ndarray],
         dilation_px: int = 12,
+        safe_zones: list[np.ndarray] | None = None,
     ) -> np.ndarray:
         """
-        Combine all per-text masks into one and run a single inpainting
-        pass. A single pass is faster than N passes and produces cleaner
-        seams between adjacent bubbles.
+        Remove all text masks from the page.
+
+        With `safe_zones` (one per mask, usually eroded bubble interiors):
+        - each mask is dilated stroke-adaptively and CLIPPED to its zone, so
+          the bubble outline and the artwork outside it are never modified
+        - masks sitting on a flat background (plain white interior) are filled
+          with the surrounding median colour instead of running LaMa — zero
+          texture damage there
+        - the rest go through a single LaMa pass (cleaner seams than N passes)
 
         Args:
             image_np:    RGB uint8 image [H, W, 3].
             masks:       List of binary masks (1 = text area, 0 = keep).
                          Each mask must have the same H×W as `image_np`.
-            dilation_px: How many pixels to expand each mask to cover
-                         anti-aliased text edges cleanly.
+            dilation_px: Legacy global dilation; used only when `safe_zones`
+                         is None.
+            safe_zones:  Optional list of binary keep-regions aligned with
+                         `masks`.
 
         Returns:
             RGB uint8 image with text removed.
@@ -72,29 +85,139 @@ class InpaintingEngine:
         if not masks:
             return image_np.copy()
 
-        combined = self._combine_masks(image_np.shape[:2], masks, dilation_px)
-        return self._inpaint(image_np, combined)
+        zones = (
+            list(safe_zones)
+            if safe_zones and len(safe_zones) == len(masks)
+            else [None] * len(masks)
+        )
+
+        out = image_np.copy()
+        lama_masks: list[np.ndarray] = []
+
+        for text_mask, zone in zip(masks, zones):
+            fat = self._expand_mask(text_mask, zone)
+            if not fat.any():
+                continue
+
+            median_color, ring_std = self._ring_stats(image_np, fat, zone)
+            if ring_std is not None and ring_std <= FLAT_STD_THRESHOLD:
+                # Flat background → solid fill; no generative model involved.
+                layer = image_np.copy()
+                layer[fat > 0] = median_color
+                out = self._composite_inpainted(out, layer, fat, feather_px=2)
+            else:
+                lama_masks.append(fat)
+
+        if not lama_masks:
+            return out
+
+        combined = np.zeros(image_np.shape[:2], dtype=np.uint8)
+        for fat in lama_masks:
+            combined = cv2.bitwise_or(combined, fat)
+        return self._inpaint(out, combined)
+
+    @staticmethod
+    def _expand_mask(
+        text_mask: np.ndarray,
+        zone: np.ndarray | None,
+        dilation_px: int | None = None,
+    ) -> np.ndarray:
+        """
+        Dilate a text mask to cover anti-aliased edges.
+
+        Dilation defaults to stroke-width-adaptive (thin glyphs get a small
+        margin, thick SFX lettering gets a bigger one). When `zone` is given
+        the expanded mask is hard-clipped to it, so the erase region can
+        never leak onto the bubble outline or the background art.
+        """
+        m = (text_mask > 0).astype(np.uint8)
+        if int(m.sum()) == 0:
+            return m
+
+        if dilation_px is None:
+            dist = cv2.distanceTransform(m, cv2.DIST_L2, 3)
+            stroke_px = float(dist.max()) * 2.0
+            dilation_px = int(np.clip(round(3 + stroke_px * 0.75), 4, 12))
+
+        kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (dilation_px * 2 + 1, dilation_px * 2 + 1)
+        )
+        fat = cv2.dilate(m, kernel, iterations=1)
+        if zone is not None:
+            fat[zone == 0] = 0
+        return fat
+
+    @staticmethod
+    def _ring_stats(
+        image_np: np.ndarray,
+        fat_mask: np.ndarray,
+        zone: np.ndarray | None,
+    ) -> tuple[np.ndarray | None, float | None]:
+        """
+        Median RGB colour and std of the pixels ringing the erase region.
+
+        Used to decide whether the local background is flat (uniform white
+        bubble interior) — those regions are safe to fill with the median
+        colour instead of asking LaMa to invent texture.
+        """
+        outer = cv2.dilate(
+            fat_mask,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13)),
+            iterations=1,
+        )
+        inner = cv2.dilate(
+            fat_mask,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
+            iterations=1,
+        )
+        ring = cv2.bitwise_and(outer, cv2.bitwise_not(inner))
+        if zone is not None:
+            ring[zone == 0] = 0
+
+        pixels = image_np[ring > 0]
+        if pixels.size < 90:
+            # Too few samples to judge flatness — let LaMa handle it safely.
+            return None, None
+
+        median_color = np.median(pixels, axis=0).astype(np.uint8)
+        std = float(pixels.astype(np.float32).std())
+        return median_color, std
 
     def build_text_masks(
         self,
         image_np: np.ndarray,
-        bubble_masks: List[np.ndarray],
-    ) -> List[np.ndarray]:
+        bubble_masks: list[np.ndarray],
+    ) -> list[np.ndarray]:
         """
         Convert bubble-level masks into text-only masks.
 
         The segmentation model finds the whole speech bubble, but for
-        inpainting we only want to erase the dark glyphs inside the bubble,
-        not the white bubble background or outline.
+        inpainting we only want to erase the dark glyphs inside the bubble —
+        never the white interior, the outline, or anything outside it.
+
+        Returns a list of (text_mask, safe_zone) pairs. The safe zone is the
+        bubble eroded clear of its border; every downstream mask operation
+        stays strictly inside that zone.
         """
-        text_masks: List[np.ndarray] = []
+        pairs: list[tuple[np.ndarray, np.ndarray]] = []
 
         for bubble_mask in bubble_masks:
             text_mask = self._extract_text_mask(image_np, bubble_mask)
-            if int(text_mask.sum()) > 0:
-                text_masks.append(text_mask)
+            if text_mask.any():
+                pairs.append((text_mask, self._safe_zone(bubble_mask)))
 
-        return text_masks
+        return pairs
+
+    @staticmethod
+    def _safe_zone(bubble_mask: np.ndarray) -> np.ndarray:
+        """Bubble interior shrunk clear of the outline — the only editable area."""
+        m = (bubble_mask > 0).astype(np.uint8)
+        if not m.any():
+            return m
+
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        zone = cv2.erode(m, kernel, iterations=3)  # ≈6 px margin off the border
+        return zone if zone.any() else m
 
     def release(self) -> None:
         """
@@ -130,10 +253,23 @@ class InpaintingEngine:
     @staticmethod
     def _combine_masks(
         shape: tuple,
-        masks: List[np.ndarray],
+        masks: list[np.ndarray],
         dilation_px: int,
+        safe_zones: list[np.ndarray] | None = None,
     ) -> np.ndarray:
-        """OR all masks together, fill tiny gaps, and dilate the result."""
+        """OR all masks together, fill tiny gaps, and expand the result.
+
+        When `safe_zones` (aligned with `masks`) is given, each mask is
+        expanded stroke-adaptively and clipped to its own zone instead of
+        dilating the combined mask globally — guarantees nothing outside the
+        zones is ever marked for erasing.
+        """
+        if safe_zones is not None and len(safe_zones) == len(masks):
+            combined = np.zeros(shape, dtype=np.uint8)
+            for m, z in zip(masks, safe_zones):
+                combined = cv2.bitwise_or(combined, InpaintingEngine._expand_mask(m, z))
+            return combined
+
         combined = np.zeros(shape, dtype=np.uint8)
         for m in masks:
             combined = cv2.bitwise_or(combined, m.astype(np.uint8))
@@ -174,7 +310,9 @@ class InpaintingEngine:
         gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
 
         inner_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        inner_mask = cv2.erode(bubble_mask, inner_kernel, iterations=1)
+        # iterations=3 ≈6 px margin: text never reaches the outline, so the
+        # border stays untouched even after downstream mask dilation
+        inner_mask = cv2.erode(bubble_mask, inner_kernel, iterations=3)
         if inner_mask.sum() == 0:
             inner_mask = bubble_mask.copy()
 
@@ -273,7 +411,7 @@ class InpaintingEngine:
 
             return result.astype(np.uint8)
 
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.error(
                 "LaMa inference failed (%s). Falling back to OpenCV TELEA.", exc
             )
@@ -340,17 +478,16 @@ class InpaintingEngine:
             alpha = np.maximum(alpha, feathered)
 
         alpha = np.clip(alpha[..., None], 0.0, 1.0)
-        blended = (
-            inpainted_np.astype(np.float32) * alpha
-            + image_np.astype(np.float32) * (1.0 - alpha)
-        )
+        blended = inpainted_np.astype(np.float32) * alpha + image_np.astype(
+            np.float32
+        ) * (1.0 - alpha)
         return np.clip(blended, 0, 255).astype(np.uint8)
 
     @staticmethod
     def _flush_vram() -> None:
         """Best-effort VRAM flush; safe even when torch is not installed."""
         try:
-            import torch  # noqa: PLC0415
+            import torch
 
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()

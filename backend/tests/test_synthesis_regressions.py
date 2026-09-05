@@ -2,10 +2,9 @@ import unittest
 
 import cv2
 import numpy as np
-
+from job_errors import clean_ocr_error_detail, ocr_failure_message
 from synthesis.inpainting import InpaintingEngine
 from synthesis.typesetting import TypesettingEngine
-from job_errors import clean_ocr_error_detail, ocr_failure_message
 
 
 class TypesettingRegressionTests(unittest.TestCase):
@@ -169,6 +168,51 @@ class InpaintingRegressionTests(unittest.TestCase):
         self.assertEqual(result.shape, original.shape)
         np.testing.assert_array_equal(result[20, 20], [200, 200, 200])
 
+    def test_process_blocks_with_safe_zones_never_touches_zone_exterior(self) -> None:
+        engine = InpaintingEngine(device="cpu")
+        h, w = 120, 160
+        image = np.full((h, w, 3), 255, dtype=np.uint8)
+        gradient = np.linspace(10, 240, w, dtype=np.uint8)
+        image[:, :, :] = gradient[None, :, None]
+
+        bubble = np.zeros((h, w), dtype=np.uint8)
+        cv2.circle(bubble, (80, 60), 45, 1, thickness=-1)
+        image[bubble > 0] = (255, 255, 255)
+        cv2.circle(image, (80, 60), 45, (0, 0, 0), thickness=4)
+        cv2.rectangle(image, (60, 50), (68, 72), (0, 0, 0), thickness=-1)
+        cv2.rectangle(image, (78, 50), (86, 72), (0, 0, 0), thickness=-1)
+
+        pairs = engine.build_text_masks(image, [bubble])
+        self.assertTrue(pairs)
+        masks = [m for m, _ in pairs]
+        zones = [z for _, z in pairs]
+
+        keep = np.zeros((h, w), dtype=np.uint8)
+        for z in zones:
+            keep |= (z > 0).astype(np.uint8)
+
+        before = image.copy()
+        result = engine.process_blocks(image, masks, safe_zones=zones)
+
+        # Nothing outside the safe zones may change — background art and the
+        # bubble outline must stay byte-identical.
+        np.testing.assert_array_equal(result[keep == 0], before[keep == 0])
+        # Text actually removed: former glyph pixels now read as flat white.
+        self.assertGreater(float(result[60, 62].mean()), 200.0)
+        self.assertGreater(float(result[60, 80].mean()), 200.0)
+
+    def test_expand_mask_clips_to_safe_zone(self) -> None:
+        zone = np.zeros((40, 40), dtype=np.uint8)
+        zone[10:30, 10:30] = 1
+        mask = np.zeros((40, 40), dtype=np.uint8)
+        mask[19:21, 19:21] = 1
+
+        fat = InpaintingEngine._expand_mask(mask, zone, dilation_px=12)
+
+        self.assertEqual(int(fat[0:10, :].sum()), 0)
+        self.assertEqual(int(fat[:, 30:].sum()), 0)
+        self.assertEqual(int(np.logical_and(fat > 0, zone > 0).sum()), int(fat.sum()))
+
 
 class OcrErrorHandlingTests(unittest.TestCase):
     def test_repeated_ocr_error_markers_become_clear_failure_detail(self) -> None:
@@ -186,7 +230,7 @@ class OcrErrorHandlingTests(unittest.TestCase):
         self.assertIn("connection refused", message)
 
     def test_ocr_semaphore_initialization(self) -> None:
-        from main import get_ocr_semaphore, OCR_CONCURRENCY
+        from main import OCR_CONCURRENCY, get_ocr_semaphore
         sem = get_ocr_semaphore()
         self.assertIsNotNone(sem)
         self.assertGreaterEqual(OCR_CONCURRENCY, 1)
