@@ -4,6 +4,7 @@ import { AnimatePresence } from 'framer-motion';
 import type {
   BlockItem,
   ProcessedManga,
+  Project,
   TypesettingOptionsResponse,
   TypesettingSettings,
   TypesetPreviewBounds,
@@ -12,10 +13,21 @@ import { mangaApi } from '../api/mangaApi';
 import { RegionCanvas, type MaskPreviewState } from './RegionCanvas';
 import { RegionInspectorCard } from './RegionInspectorCard';
 
+export function getPageWindow(curr: number, total: number): number[] {
+  if (total <= 0) return [];
+  const count = Math.min(5, total);
+  const start = Math.max(1, Math.min(curr - 2, total - count + 1));
+  const end = Math.min(total, start + count - 1);
+  return Array.from({ length: end - start + 1 }, (_, i) => start + i);
+}
+
 interface TranslationEditorProps {
   item: ProcessedManga;
   onClose: () => void;
   onUpdate: (id: string, updates: Partial<ProcessedManga>) => void;
+  project?: Project | null;
+  pages?: ProcessedManga[];
+  onNavigatePage?: (targetId: string) => Promise<void> | void;
 }
 
 type RegionAction = 'save' | 'ocr' | 'delete';
@@ -56,6 +68,9 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
   item,
   onClose,
   onUpdate,
+  project,
+  pages,
+  onNavigatePage,
 }) => {
   const [blocks, setBlocks] = useState<BlockItem[]>(() => item.blocks || []);
   const savedBlocksRef = useRef(blocks);
@@ -119,6 +134,48 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
         setTypesettingOptionsError(err instanceof Error ? err.message : 'Failed to load typesetting options');
       });
   }, []);
+
+  useEffect(() => {
+    setBlocks(item.blocks || []);
+    savedBlocksRef.current = item.blocks || [];
+    setSelectedBlockId(null);
+    setEditedSources(initialTextMap(item.blocks, 'text'));
+    setEditedTranslations(initialTextMap(item.blocks, 'translated_text'));
+    setEditedTypesetting(initialTypesettingMap(item.blocks));
+    setDirtySourceIds(new Set());
+    setDirtyTranslationIds(new Set());
+    setDirtyTypesettingIds(new Set());
+    setPreviewCache({});
+    setMaskPreviewUrl(item.mask_preview_url);
+    setMaskPreviewState(item.mask_preview_url ? 'ready' : 'idle');
+    setShowMaskPreview(Boolean(item.mask_preview_url));
+    setSubmitError(null);
+    setRegionError(null);
+  }, [item.id]);
+
+  const currentPageIndex = pages && pages.length > 0 ? pages.findIndex(p => p.id === item.id) : -1;
+  const isSwitchingPageRef = useRef(false);
+
+  const handlePageChange = async (targetIndex: number) => {
+    if (!pages || targetIndex < 0 || targetIndex >= pages.length || isSwitchingPageRef.current) return;
+    const targetPage = pages[targetIndex];
+    if (!targetPage || targetPage.id === item.id) return;
+
+    isSwitchingPageRef.current = true;
+    try {
+      if (dirtySourceIds.size > 0 || dirtyTranslationIds.size > 0 || dirtyTypesettingIds.size > 0) {
+        await persistDirtyBlocks();
+      }
+      if (onNavigatePage) {
+        await onNavigatePage(targetPage.id);
+      }
+    } catch (err) {
+      console.error('Failed to auto-save before navigating:', err);
+      setSubmitError(err instanceof Error ? err.message : 'Failed to switch page');
+    } finally {
+      isSwitchingPageRef.current = false;
+    }
+  };
 
   const selectedBlock = selectedBlockId ? blocks.find(b => b.id === selectedBlockId) : null;
   const selectedTranslation = selectedBlockId ? editedTranslations[selectedBlockId] : undefined;
@@ -466,7 +523,11 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
           translated_text: persisted.translations[block.id],
         })),
       });
-      onClose();
+      if (pages && currentPageIndex >= 0 && currentPageIndex < pages.length - 1 && onNavigatePage) {
+        await onNavigatePage(pages[currentPageIndex + 1].id);
+      } else {
+        onClose();
+      }
     } catch (err) {
       console.error('Failed to approve translation:', err);
       setSubmitError(err instanceof Error ? err.message : 'Failed to approve translation');
@@ -480,23 +541,16 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col overflow-hidden bg-app font-sans selection:bg-accent-surface">
-      <header className="z-10 flex items-center justify-between gap-3 border-b border-border bg-surface px-3 py-3 sm:px-6 sm:py-4">
-        <div className="flex min-w-0 items-center gap-3">
-          <Icon icon="solar:translation-2-linear" className="text-xl text-accent" />
-          <h2 className="hidden font-mono text-lg font-bold uppercase tracking-tight sm:block text-main">
-            Translation Studio <span className="text-muted">{'//'}</span> HITL Review
-          </h2>
-          <span className="truncate rounded border border-accent/30 bg-accent-surface px-2 py-0.5 font-mono text-xs text-accent font-medium">
-            {item.filename}
-          </span>
-        </div>
+      <header className="z-10 flex items-center justify-between border-b border-border bg-surface px-6 py-3">
+        <h1 className="font-mono text-sm font-bold uppercase tracking-wider text-main">
+          {project?.name ?? "Manga Project"}
+        </h1>
 
         <button
           type="button"
           onClick={onClose}
-          className="flex min-h-11 items-center gap-1.5 rounded border border-border bg-surface px-3 py-2 font-mono text-xs font-bold uppercase tracking-widest text-main transition-colors hover:border-red-500 hover:bg-red-500/10 hover:text-red-500"
+          className="rounded border border-border bg-panel px-3 py-1.5 font-mono text-xs font-bold uppercase text-main transition-colors hover:border-red-500 hover:bg-red-500/10 hover:text-red-500"
         >
-          <Icon icon="solar:close-square-linear" />
           Exit
         </button>
       </header>
@@ -617,6 +671,85 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
           </div>
         </aside>
       </div>
+
+      {pages && pages.length > 0 && currentPageIndex >= 0 ? (
+        <footer className="z-10 flex flex-wrap min-h-14 items-center justify-between gap-3 border-t border-border bg-surface px-4 py-2 sm:px-6">
+          <div className="flex items-center gap-2 font-mono text-xs">
+            <span className="text-muted uppercase font-bold">Jump to:</span>
+            <select
+              value={currentPageIndex >= 0 ? currentPageIndex : 0}
+              onChange={(e) => handlePageChange(Number(e.target.value))}
+              disabled={controlsDisabled}
+              className="rounded border border-border bg-panel px-3 py-1.5 font-mono text-xs text-main focus:border-accent focus:outline-none"
+            >
+              {pages.map((p, idx) => (
+                <option key={p.id} value={idx}>
+                  Page {idx + 1}: {p.filename}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-1 font-mono text-xs">
+            <button
+              type="button"
+              disabled={controlsDisabled || currentPageIndex <= 0}
+              onClick={() => handlePageChange(currentPageIndex - 1)}
+              className="flex h-8 items-center gap-1 rounded border border-border bg-panel px-3 font-bold uppercase text-main disabled:opacity-30 hover:border-accent transition-colors"
+            >
+              &lt; Prev
+            </button>
+
+            {getPageWindow(currentPageIndex + 1, pages.length).map((pageNum) => (
+              <button
+                type="button"
+                key={pageNum}
+                disabled={controlsDisabled}
+                onClick={() => handlePageChange(pageNum - 1)}
+                className={`h-8 min-w-8 rounded border px-2.5 font-bold transition-colors ${
+                  pageNum === currentPageIndex + 1
+                    ? "border-accent bg-accent text-white"
+                    : "border-border bg-panel text-muted hover:text-main"
+                }`}
+              >
+                {pageNum}
+              </button>
+            ))}
+
+            <button
+              type="button"
+              disabled={controlsDisabled || currentPageIndex >= pages.length - 1}
+              onClick={() => handlePageChange(currentPageIndex + 1)}
+              className="flex h-8 items-center gap-1 rounded border border-border bg-panel px-3 font-bold uppercase text-main disabled:opacity-30 hover:border-accent transition-colors"
+            >
+              Next &gt;
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleApprove}
+            disabled={controlsDisabled}
+            className="flex min-h-9 items-center justify-center gap-1.5 rounded bg-accent px-4 py-2 font-mono text-xs font-bold uppercase tracking-wider text-white transition-colors hover:bg-accent-hover disabled:bg-panel disabled:text-muted"
+          >
+            {isSubmitting ? (
+              <>
+                <Icon icon="eos-icons:loading" className="text-sm animate-spin" />
+                <span>Approving…</span>
+              </>
+            ) : (
+              <>
+                <Icon icon="solar:check-circle-linear" className="text-sm" />
+                <span>
+                  {pages && currentPageIndex >= 0 && currentPageIndex < pages.length - 1
+                    ? "Approve & Next"
+                    : "Approve"}
+                </span>
+              </>
+            )}
+          </button>
+        </footer>
+      ) : null}
     </div>
   );
 };

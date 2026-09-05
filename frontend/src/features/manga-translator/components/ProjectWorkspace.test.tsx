@@ -6,10 +6,13 @@ import { MangaTranslatorContext } from "../context/MangaTranslatorContext";
 import type { MangaTranslatorContextType } from "../context/MangaTranslatorContext";
 import type { ProcessedManga, Project } from "../types";
 
+const mockPush = vi.fn();
+
 vi.mock("next/navigation", () => ({
   useRouter: () => ({
-    push: vi.fn(),
+    push: mockPush,
   }),
+  usePathname: () => "/projects/p1",
 }));
 
 const createMockContextValue = (overrides?: Partial<MangaTranslatorContextType>): MangaTranslatorContextType => ({
@@ -170,6 +173,52 @@ describe("ProjectWorkspace", () => {
     expect(screen.getByText("completed_page.png")).toBeInTheDocument();
     expect(screen.queryByText("review_page.png")).not.toBeInTheDocument();
     expect(screen.queryByText("failed_page.png")).not.toBeInTheDocument();
+  });
+
+  it("routes to standalone editor on REVIEW click and does not render nested editor", () => {
+    const mockProject: Project = {
+      id: "p1",
+      name: "Chapter 1",
+      created_at: new Date().toISOString(),
+      job_ids: ["j1"],
+      page_order: ["j1"],
+    };
+
+    const mockFiles: ProcessedManga[] = [
+      {
+        id: "j1",
+        filename: "review_page.png",
+        originalUrl: "/uploads/page01.png",
+        status: "awaiting_review",
+        progress: 100,
+        project_id: "p1",
+        sequence_id: 0,
+      },
+    ];
+
+    const contextValue = createMockContextValue({
+      files: mockFiles,
+      projects: [mockProject],
+    });
+
+    render(
+      <MangaTranslatorContext.Provider value={contextValue}>
+        <ProjectWorkspace projectId="p1" />
+      </MangaTranslatorContext.Provider>
+    );
+
+    const reviewBtn = screen.getByRole("button", { name: /^review$/i });
+    expect(reviewBtn).toBeInTheDocument();
+    fireEvent.click(reviewBtn);
+
+    expect(mockPush).toHaveBeenCalledWith("/editor/j1?from=%2Fprojects%2Fp1");
+
+    const studioBtn = screen.getByRole("button", { name: /enter translation studio/i });
+    expect(studioBtn).toBeInTheDocument();
+    fireEvent.click(studioBtn);
+    expect(mockPush).toHaveBeenCalledWith("/editor/j1?from=%2Fprojects%2Fp1");
+
+    expect(screen.queryByText(/Region inspector/i)).not.toBeInTheDocument();
   });
 });
 

@@ -1,11 +1,11 @@
 "use client";
 
 import React, { useState } from "react";
+import { useRouter, usePathname } from "next/navigation";
 import { Icon } from "@iconify-icon/react";
 import { motion, AnimatePresence } from "framer-motion";
 import { mangaApi } from "../api/mangaApi";
 import type { MangaStatus, ProcessedManga } from "../types";
-import { TranslationEditor } from "./TranslationEditor";
 
 interface MangaFileItemProps {
   item: ProcessedManga;
@@ -28,8 +28,9 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
   onRemove,
   onUpdate,
 }) => {
+  const router = useRouter();
+  const pathname = usePathname();
   const [showText, setShowText] = useState(false);
-  const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [displayMode, setDisplayMode] = useState<
     "translated" | "inpainted" | "original"
   >("translated");
@@ -155,7 +156,9 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
               )}
               {item.status === "awaiting_review" && (
                 <button
-                  onClick={() => setIsEditorOpen(true)}
+                  onClick={() =>
+                    router.push(`/editor/${item.id}?from=${encodeURIComponent(pathname)}`)
+                  }
                   className="px-3 py-1.5 min-h-11 bg-accent hover:bg-accent-hover text-white transition-all text-xs font-mono font-bold uppercase tracking-widest flex items-center gap-1.5 rounded"
                 >
                   <Icon icon="solar:translation-2-linear" />
@@ -258,7 +261,9 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
                   </p>
                 </div>
                 <button
-                  onClick={() => setIsEditorOpen(true)}
+                  onClick={() =>
+                    router.push(`/editor/${item.id}?from=${encodeURIComponent(pathname)}`)
+                  }
                   className="px-5 py-2.5 min-h-11 bg-accent hover:bg-accent-hover text-white font-bold uppercase tracking-widest text-xs font-mono transition-all duration-200 flex items-center gap-2 cursor-pointer rounded"
                 >
                   <Icon icon="solar:translation-2-linear" className="text-sm" />
@@ -360,14 +365,6 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
           </div>
         )}
       </div>
-
-      {isEditorOpen && (
-        <TranslationEditor
-          item={item}
-          onClose={() => setIsEditorOpen(false)}
-          onUpdate={onUpdate}
-        />
-      )}
     </motion.article>
   );
 };
