@@ -261,7 +261,9 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
                   </p>
                 </div>
                 <button
-                  onClick={() => setIsEditorOpen(true)}
+                  onClick={() =>
+                    router.push(`/editor/${item.id}?from=${encodeURIComponent(pathname)}`)
+                  }
                   className="px-5 py-2.5 min-h-11 bg-accent hover:bg-accent-hover text-white font-bold uppercase tracking-widest text-xs font-mono transition-all duration-200 flex items-center gap-2 cursor-pointer rounded"
                 >
                   <Icon icon="solar:translation-2-linear" className="text-sm" />

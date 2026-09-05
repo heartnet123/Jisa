@@ -151,7 +151,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     setShowMaskPreview(Boolean(item.mask_preview_url));
     setSubmitError(null);
     setRegionError(null);
-  }, [item.id, item.blocks, item.mask_preview_url]);
+  }, [item.id]);
 
   const currentPageIndex = pages && pages.length > 0 ? pages.findIndex(p => p.id === item.id) : -1;
   const isSwitchingPageRef = useRef(false);
@@ -672,7 +672,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
         </aside>
       </div>
 
-      {pages && pages.length > 0 ? (
+      {pages && pages.length > 0 && currentPageIndex >= 0 ? (
         <footer className="z-10 flex flex-wrap min-h-14 items-center justify-between gap-3 border-t border-border bg-surface px-4 py-2 sm:px-6">
           <div className="flex items-center gap-2 font-mono text-xs">
             <span className="text-muted uppercase font-bold">Jump to:</span>
