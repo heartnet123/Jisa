@@ -212,6 +212,12 @@ describe("ProjectWorkspace", () => {
     fireEvent.click(reviewBtn);
 
     expect(mockPush).toHaveBeenCalledWith("/editor/j1?from=%2Fprojects%2Fp1");
+
+    const studioBtn = screen.getByRole("button", { name: /enter translation studio/i });
+    expect(studioBtn).toBeInTheDocument();
+    fireEvent.click(studioBtn);
+    expect(mockPush).toHaveBeenCalledWith("/editor/j1?from=%2Fprojects%2Fp1");
+
     expect(screen.queryByText(/Region inspector/i)).not.toBeInTheDocument();
   });
 });
