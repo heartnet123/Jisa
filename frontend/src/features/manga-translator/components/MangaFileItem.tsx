@@ -196,26 +196,9 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
         </div>
       </div>
 
-      <div className="grid md:grid-cols-2 bg-border gap-[1px] relative">
-        {/* Original */}
-        <div className="relative aspect-[3/4] bg-app overflow-hidden flex items-center justify-center">
-          <div className="absolute top-4 left-4 z-10 px-2 py-1 bg-surface/90 border border-border text-xs font-mono uppercase tracking-wider text-muted font-medium rounded">
-            Raw Input
-          </div>
-          <img
-            src={item.originalUrl || item.result_url || item.inpainted_url || ""}
-            alt="Original"
-            className="w-full h-full object-contain filter grayscale-[0.5]"
-          />
-        </div>
-
-        {/* AI Results Layer */}
-        <div className="relative aspect-[3/4] bg-app overflow-hidden transition-colors font-mono">
-          <div className="absolute top-4 left-4 z-10 px-2 py-1 bg-accent-surface border border-accent/30 text-xs font-mono uppercase tracking-wider text-accent font-medium rounded">
-            Pipeline Result
-          </div>
-
-          <AnimatePresence mode="wait">
+      {/* AI Results Layer */}
+      <div className="relative aspect-[3/4] bg-app overflow-hidden transition-colors font-mono">
+        <AnimatePresence mode="wait">
             {hasError ? (
               <motion.div
                 key="ai-error"
@@ -336,9 +319,8 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
             )}
           </AnimatePresence>
         </div>
-      </div>
 
-      {/* Progress & Error */}
+      {/* Progress */}
       <div className="relative">
         <div className="h-1 bg-border">
           <motion.div
@@ -351,19 +333,6 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
             transition={{ type: "spring", stiffness: 100, damping: 20 }}
           />
         </div>
-        {(item.error || item.message) && (
-          <div
-            className={cn(
-              "px-4 py-2 border-t text-xs font-mono uppercase tracking-widest",
-              hasError
-                ? "bg-red-500/10 border-red-500/20 text-red-500"
-                : "bg-surface border-border text-muted",
-            )}
-          >
-            {hasError ? "Critical Error: " : "Job Status: "}
-            {statusMessage}
-          </div>
-        )}
       </div>
     </motion.article>
   );
