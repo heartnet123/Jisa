@@ -57,6 +57,11 @@ const PageOrderInput: React.FC<{
   );
 };
 
+const formatDate = (iso: string) => {
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? '' : `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getFullYear()).slice(-2)}`;
+};
+
 export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId }) => {
   const router = useRouter();
   const shouldReduceMotion = useReducedMotion();
@@ -329,7 +334,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
                       </div>
 
                       <div className="text-xs text-subtle mt-1">
-                        Created: {new Date(proj.created_at).toLocaleDateString()}
+                        Created: {formatDate(proj.created_at)}
                       </div>
                     </button>
                   );
@@ -602,7 +607,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId })
               </div>
             )}
             <p className="text-xs text-subtle font-mono uppercase tracking-widest font-medium">
-              ID: {projectId} {"//"} Created: {new Date(activeProj.created_at).toLocaleString()}
+              Created: {formatDate(activeProj.created_at)}
             </p>
           </div>
 
