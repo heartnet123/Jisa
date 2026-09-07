@@ -52,7 +52,7 @@ describe("MangaFileItem", () => {
     expect(screen.getByText("Translating bubble 3 of 5 with LiteLLM...")).toBeInTheDocument();
   });
 
-  it("renders statusMessage during inpainting and typesetting", () => {
+  it("renders statusMessage once during inpainting and typesetting", () => {
     const inpaintingItem: ProcessedManga = {
       id: "j3",
       filename: "test3.png",
@@ -70,7 +70,7 @@ describe("MangaFileItem", () => {
       />
     );
 
-    expect(screen.getAllByText("Cleaning text bubbles with LaMa...")[0]).toBeInTheDocument();
+    expect(screen.getByText("Cleaning text bubbles with LaMa...")).toBeInTheDocument();
 
     const typesettingItem: ProcessedManga = {
       id: "j4",
@@ -89,6 +89,28 @@ describe("MangaFileItem", () => {
       />
     );
 
-    expect(screen.getAllByText("Typesetting Thai text on clean background...")[0]).toBeInTheDocument();
+    expect(screen.getByText("Typesetting Thai text on clean background...")).toBeInTheDocument();
+  });
+
+  it("renders failure text in the AI Results panel for failed jobs", () => {
+    const failedItem: ProcessedManga = {
+      id: "j5",
+      filename: "failed.png",
+      originalUrl: "https://example.com/failed.png",
+      status: "failed",
+      progress: 40,
+      error: "GLM-OCR pipeline timed out",
+    };
+
+    render(
+      <MangaFileItem
+        item={failedItem}
+        onRemove={vi.fn()}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText("Job Stopped")).toBeInTheDocument();
+    expect(screen.getByText("GLM-OCR pipeline timed out")).toBeInTheDocument();
   });
 });

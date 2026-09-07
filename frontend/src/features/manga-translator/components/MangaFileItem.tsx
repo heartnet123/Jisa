@@ -284,7 +284,7 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
                   </span>
                   <p className="text-sm text-main font-sans leading-relaxed min-h-[100px] p-3 bg-accent-surface border border-accent/20 rounded">
                     {item.translated_text ||
-                      (["translating", "inpainting", "typesetting"].includes(item.status)
+                      (item.status === "translating"
                         ? statusMessage
                         : "Awaiting data...")}
                   </p>
