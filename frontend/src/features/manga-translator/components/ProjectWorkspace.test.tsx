@@ -220,5 +220,27 @@ describe("ProjectWorkspace", () => {
 
     expect(screen.queryByText(/Region inspector/i)).not.toBeInTheDocument();
   });
+
+  it("formats created_at consistently in DD/MM/YY format across UTC timestamps", () => {
+    const mockProject: Project = {
+      id: "p1",
+      name: "Chapter 1",
+      created_at: "2026-09-07T00:30:00Z",
+      job_ids: [],
+      page_order: [],
+    };
+
+    const contextValue = createMockContextValue({
+      projects: [mockProject],
+    });
+
+    render(
+      <MangaTranslatorContext.Provider value={contextValue}>
+        <ProjectWorkspace projectId="p1" />
+      </MangaTranslatorContext.Provider>
+    );
+
+    expect(screen.getByText("Created: 07/09/26")).toBeInTheDocument();
+  });
 });
 
