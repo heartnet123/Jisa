@@ -153,7 +153,8 @@ class InpaintingEngine:
             return m
 
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        zone = cv2.erode(m, kernel, iterations=3)  # ≈6 px margin off the border
+        iterations = 1 if int(m.sum()) < 2500 else 3
+        zone = cv2.erode(m, kernel, iterations=iterations)
         return zone if zone.any() else m
 
     def release(self) -> None:
@@ -246,12 +247,7 @@ class InpaintingEngine:
 
         gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
 
-        inner_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        # iterations=3 ≈6 px margin: text never reaches the outline, so the
-        # border stays untouched even after downstream mask dilation
-        inner_mask = cv2.erode(bubble_mask, inner_kernel, iterations=3)
-        if inner_mask.sum() == 0:
-            inner_mask = bubble_mask.copy()
+        inner_mask = InpaintingEngine._safe_zone(bubble_mask)
 
         x, y, w_roi, h_roi = cv2.boundingRect(inner_mask)
         if w_roi <= 0 or h_roi <= 0:

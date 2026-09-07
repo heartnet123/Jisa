@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { HTMLAttributes, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -43,11 +43,17 @@ vi.mock("./RegionCanvas", () => ({
     maskPreviewUrl,
     showMaskPreview,
     onToggleMaskPreview,
+    blocks,
+    onChange,
+    onCommit,
   }: {
     maskPreviewState: string;
     maskPreviewUrl?: string;
     showMaskPreview: boolean;
     onToggleMaskPreview?: () => void;
+    blocks: BlockItem[];
+    onChange: (blocks: BlockItem[]) => void;
+    onCommit: (blocks: BlockItem[]) => void;
   }) => (
     <div>
       <button type="button" onClick={onToggleMaskPreview}>
@@ -56,6 +62,14 @@ vi.mock("./RegionCanvas", () => ({
       <span data-testid="mask-state">{maskPreviewState}</span>
       <span data-testid="mask-url">{maskPreviewUrl ?? ""}</span>
       <span data-testid="mask-visible">{String(showMaskPreview)}</span>
+      <button type="button" onClick={() => {
+        const moved = blocks.map(region => ({ ...region, box: { ...region.box, x: 0.4 } }));
+        onChange(moved);
+        onCommit(moved);
+      }}>Move canvas region</button>
+      <button type="button" onClick={() => onChange(blocks.map(region => ({
+        ...region, box: { ...region.box, x: 0.4 },
+      })))}>Drag canvas region</button>
     </div>
   ),
 }));
@@ -196,6 +210,54 @@ describe("TranslationEditor", () => {
       mask_preview_url: "http://localhost:8000/uploads/mask.png?v=2",
       preview_revision: 2,
     });
+  });
+
+  it.each(["Move", "Drag"])("ignores a mask response after %s and allows regeneration", async action => {
+    const user = userEvent.setup();
+    let resolve!: (value: { url: string; revision: number }) => void;
+    api.generateMaskPreview.mockReturnValueOnce(new Promise(done => { resolve = done; }));
+    const { onUpdate } = renderEditor();
+    await user.click(screen.getByRole("button", { name: "Canvas mask preview" }));
+    await user.click(screen.getByRole("button", { name: `${action} canvas region` }));
+    await act(async () => { resolve({ url: "/old-mask.png", revision: 1 }); });
+
+    expect(screen.getByTestId("mask-visible")).toHaveTextContent("false");
+    expect(screen.getByTestId("mask-state")).toHaveTextContent("stale");
+    expect(onUpdate).not.toHaveBeenCalledWith("job-1", expect.objectContaining({ mask_preview_url: "/old-mask.png" }));
+    await user.click(screen.getByRole("button", { name: "Canvas mask preview" }));
+    expect(screen.getByTestId("mask-url")).toHaveTextContent("mask.png?v=2");
+    expect(screen.getByTestId("mask-visible")).toHaveTextContent("true");
+  });
+
+  it("ignores an old mask error after a newer preview succeeds", async () => {
+    const user = userEvent.setup();
+    let reject!: (reason: Error) => void;
+    api.generateMaskPreview.mockReturnValueOnce(new Promise((_done, fail) => { reject = fail; }));
+    renderEditor();
+    await user.click(screen.getByRole("button", { name: "Canvas mask preview" }));
+    await user.click(screen.getByRole("button", { name: "Move canvas region" }));
+    await user.click(screen.getByRole("button", { name: "Canvas mask preview" }));
+    await act(async () => { reject(new Error("stale request failed")); });
+
+    expect(screen.getByTestId("mask-state")).toHaveTextContent("ready");
+    expect(screen.getByTestId("mask-visible")).toHaveTextContent("true");
+    expect(screen.queryByText("stale request failed")).not.toBeInTheDocument();
+  });
+
+  it("ignores a mask response belonging to the previous page", async () => {
+    const user = userEvent.setup();
+    let resolve!: (value: { url: string; revision: number }) => void;
+    api.generateMaskPreview.mockReturnValueOnce(new Promise(done => { resolve = done; }));
+    const onUpdate = vi.fn();
+    const onClose = vi.fn();
+    const { rerender } = render(<TranslationEditor item={item} onClose={onClose} onUpdate={onUpdate} />);
+    await user.click(screen.getByRole("button", { name: "Canvas mask preview" }));
+    rerender(<TranslationEditor item={{ ...item, id: "job-2" }} onClose={onClose} onUpdate={onUpdate} />);
+    await act(async () => { resolve({ url: "/previous-page-mask.png", revision: 1 }); });
+
+    expect(screen.getByTestId("mask-state")).toHaveTextContent("idle");
+    expect(screen.getByTestId("mask-visible")).toHaveTextContent("false");
+    expect(onUpdate).not.toHaveBeenCalled();
   });
 
   it("deletes a region through canonical collection persistence", async () => {

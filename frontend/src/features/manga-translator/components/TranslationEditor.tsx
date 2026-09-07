@@ -120,6 +120,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     item.mask_preview_url ? 'ready' : 'idle',
   );
   const [showMaskPreview, setShowMaskPreview] = useState(Boolean(item.mask_preview_url));
+  const maskRequestRef = useRef(0);
 
   const [typesettingOptionsError, setTypesettingOptionsError] = useState<string | null>(null);
 
@@ -151,6 +152,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     setShowMaskPreview(Boolean(item.mask_preview_url));
     setSubmitError(null);
     setRegionError(null);
+    return () => { maskRequestRef.current += 1; };
   }, [item.id]);
 
   const currentPageIndex = pages && pages.length > 0 ? pages.findIndex(p => p.id === item.id) : -1;
@@ -324,12 +326,15 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     }
   };
 
-  const handleCanvasCommit = async (nextBlocks: BlockItem[]) => {
-    if (maskPreviewUrl || maskPreviewState === 'ready') {
-      setMaskPreviewState('stale');
-    }
+  const invalidateMaskPreview = () => {
+    maskRequestRef.current += 1;
+    setMaskPreviewState('stale');
     setShowMaskPreview(false);
     setMaskPreviewUrl(undefined);
+  };
+
+  const handleCanvasCommit = async (nextBlocks: BlockItem[]) => {
+    invalidateMaskPreview();
     onUpdate(item.id, { mask_preview_url: undefined });
     return handleRegionCommit(nextBlocks);
   };
@@ -489,10 +494,12 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
       return;
     }
 
+    const request = ++maskRequestRef.current;
     setMaskPreviewState('loading');
     setRegionError(null);
     try {
       const preview = await mangaApi.generateMaskPreview(item.id);
+      if (request !== maskRequestRef.current) return;
       setMaskPreviewUrl(preview.url);
       setMaskPreviewState('ready');
       setShowMaskPreview(true);
@@ -501,6 +508,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
         preview_revision: preview.revision,
       });
     } catch (err) {
+      if (request !== maskRequestRef.current) return;
       console.error('Failed to generate mask preview:', err);
       setMaskPreviewState('error');
       setShowMaskPreview(false);
@@ -566,7 +574,10 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
             maskPreviewUrl={maskPreviewUrl}
             maskPreviewState={maskPreviewState}
             showMaskPreview={showMaskPreview}
-            onChange={setBlocks}
+            onChange={nextBlocks => {
+              invalidateMaskPreview();
+              setBlocks(nextBlocks);
+            }}
             onCommit={handleCanvasCommit}
             onSelect={handleSelect}
             onToggleMaskPreview={handleToggleMaskPreview}
