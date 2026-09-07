@@ -261,6 +261,12 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
                 exit={{ opacity: 0 }}
                 className="absolute inset-0 p-8 flex flex-col gap-6 overflow-y-auto bg-app"
               >
+                {["inpainting", "typesetting"].includes(item.status) && (
+                  <div className="flex items-center gap-2 text-xs font-mono text-accent">
+                    <Icon icon="eos-icons:bubble-loading" className="text-base" />
+                    <span>{statusMessage}</span>
+                  </div>
+                )}
                 <div className="space-y-2">
                   <span className="text-xs uppercase tracking-widest text-muted block font-medium">
                     Extracted Text (GLM-OCR)
@@ -278,7 +284,7 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
                   </span>
                   <p className="text-sm text-main font-sans leading-relaxed min-h-[100px] p-3 bg-accent-surface border border-accent/20 rounded">
                     {item.translated_text ||
-                      (item.status === "translating"
+                      (["translating", "inpainting", "typesetting"].includes(item.status)
                         ? statusMessage
                         : "Awaiting data...")}
                   </p>

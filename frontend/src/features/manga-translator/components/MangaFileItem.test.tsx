@@ -51,4 +51,44 @@ describe("MangaFileItem", () => {
 
     expect(screen.getByText("Translating bubble 3 of 5 with LiteLLM...")).toBeInTheDocument();
   });
+
+  it("renders statusMessage during inpainting and typesetting", () => {
+    const inpaintingItem: ProcessedManga = {
+      id: "j3",
+      filename: "test3.png",
+      originalUrl: "https://example.com/test3.png",
+      status: "inpainting",
+      progress: 75,
+      message: "Cleaning text bubbles with LaMa...",
+    };
+
+    const { rerender } = render(
+      <MangaFileItem
+        item={inpaintingItem}
+        onRemove={vi.fn()}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    expect(screen.getAllByText("Cleaning text bubbles with LaMa...")[0]).toBeInTheDocument();
+
+    const typesettingItem: ProcessedManga = {
+      id: "j4",
+      filename: "test4.png",
+      originalUrl: "https://example.com/test4.png",
+      status: "typesetting",
+      progress: 90,
+      message: "Typesetting Thai text on clean background...",
+    };
+
+    rerender(
+      <MangaFileItem
+        item={typesettingItem}
+        onRemove={vi.fn()}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    expect(screen.getAllByText("Typesetting Thai text on clean background...")[0]).toBeInTheDocument();
+  });
 });
