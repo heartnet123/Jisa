@@ -268,7 +268,7 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
                   <p className="text-xs text-main font-sans leading-relaxed min-h-[50px] p-3 bg-surface border border-border rounded">
                     {item.ocr_text ||
                       (["segmenting", "ocr"].includes(item.status)
-                        ? "Processing OCR..."
+                        ? statusMessage
                         : "Awaiting data...")}
                   </p>
                 </div>
@@ -279,7 +279,7 @@ export const MangaFileItem: React.FC<MangaFileItemProps> = ({
                   <p className="text-sm text-main font-sans leading-relaxed min-h-[100px] p-3 bg-accent-surface border border-accent/20 rounded">
                     {item.translated_text ||
                       (item.status === "translating"
-                        ? "Translating to Thai (Vibe Check)..."
+                        ? statusMessage
                         : "Awaiting data...")}
                   </p>
                 </div>

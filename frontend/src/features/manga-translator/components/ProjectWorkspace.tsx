@@ -59,7 +59,9 @@ const PageOrderInput: React.FC<{
 
 const formatDate = (iso: string) => {
   const d = new Date(iso);
-  return isNaN(d.getTime()) ? '' : `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getFullYear()).slice(-2)}`;
+  return isNaN(d.getTime())
+    ? ''
+    : `${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${String(d.getUTCFullYear()).slice(-2)}`;
 };
 
 export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({ projectId }) => {
