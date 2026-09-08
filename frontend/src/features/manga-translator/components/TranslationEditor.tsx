@@ -74,6 +74,18 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
 }) => {
   const [blocks, setBlocks] = useState<BlockItem[]>(() => item.blocks || []);
   const savedBlocksRef = useRef(blocks);
+  const geometrySaveRef = useRef<Promise<boolean>>(Promise.resolve(true));
+  const geometryRevisionRef = useRef(0);
+  const pageRef = useRef(item.id);
+  pageRef.current = item.id;
+
+  const waitForGeometry = async () => {
+    let pending;
+    do {
+      pending = geometrySaveRef.current;
+      if (!await pending) throw new Error('Layout save failed. Save layout before continuing.');
+    } while (pending !== geometrySaveRef.current);
+  };
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
   const [editedSources, setEditedSources] = useState<Record<string, string>>(() =>
     initialTextMap(item.blocks, 'text'),
@@ -139,6 +151,9 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
   useEffect(() => {
     setBlocks(item.blocks || []);
     savedBlocksRef.current = item.blocks || [];
+    geometryRevisionRef.current += 1;
+    geometrySaveRef.current = Promise.resolve(true);
+    setIsSavingRegions(false);
     setSelectedBlockId(null);
     setEditedSources(initialTextMap(item.blocks, 'text'));
     setEditedTranslations(initialTextMap(item.blocks, 'translated_text'));
@@ -186,6 +201,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
   useEffect(() => {
     if (!selectedBlockId || !selectedBlock) return;
     const blockId = selectedBlockId;
+    let canceled = false;
 
     const rev = (clientRevisionsRef.current[blockId] ?? 0) + 1;
     clientRevisionsRef.current[blockId] = rev;
@@ -193,7 +209,6 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     setPreviewCache(prev => ({
       ...prev,
       [blockId]: {
-        ...prev[blockId],
         loading: true,
         error: null,
       },
@@ -201,13 +216,16 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
 
     const timer = setTimeout(async () => {
       try {
+        await waitForGeometry();
+        if (canceled) return;
+        const activeRevision = geometryRevisionRef.current;
         const res = await mangaApi.generateTypesetPreview(item.id, blockId, {
           client_revision: rev,
           translated_text: editedTranslations[blockId] ?? '',
           typesetting: editedTypesetting[blockId] ?? defaultTypesetting(selectedBlock.typesetting),
         });
 
-        if (clientRevisionsRef.current[blockId] === res.client_revision) {
+        if (!canceled && geometryRevisionRef.current === activeRevision && clientRevisionsRef.current[blockId] === res.client_revision) {
           const currentTypesetting = editedTypesetting[blockId] ?? defaultTypesetting(selectedBlock.typesetting);
           if (
             currentTypesetting.auto_fit &&
@@ -240,11 +258,10 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
           }));
         }
       } catch (err) {
-        if (clientRevisionsRef.current[blockId] === rev) {
+        if (!canceled && clientRevisionsRef.current[blockId] === rev) {
           setPreviewCache(prev => ({
             ...prev,
             [blockId]: {
-              ...prev[blockId],
               loading: false,
               error: err instanceof Error ? err.message : 'Preview failed',
             },
@@ -253,9 +270,10 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
       }
     }, 250);
 
-    return () => clearTimeout(timer);
+    return () => { canceled = true; clearTimeout(timer); };
   }, [
     item.id,
+    isSavingRegions,
     selectedBlockId,
     selectedTranslation,
     selectedTypesetting?.font_name,
@@ -293,13 +311,21 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     );
   };
 
-  const handleRegionCommit = async (nextBlocks: BlockItem[]): Promise<boolean> => {
+  const handleRegionCommit = (nextBlocks: BlockItem[]): Promise<boolean> => {
+    const revision = ++geometryRevisionRef.current;
+    const previousSave = geometrySaveRef.current;
+    const jobId = item.id;
     setIsSavingRegions(true);
     setRegionError(null);
+    let save!: Promise<boolean>;
+    save = (async () => {
     try {
-      const saved = await mangaApi.replaceRegions(item.id, nextBlocks);
+      await previousSave;
+      const saved = await mangaApi.replaceRegions(jobId, nextBlocks);
+      if (pageRef.current !== jobId) return true;
       savedBlocksRef.current = saved.regions;
-      setBlocks(saved.regions);
+      if (revision !== geometryRevisionRef.current) return true;
+      setBlocks(current => current === nextBlocks ? saved.regions : current);
       updateTextMapsForRegions(saved.regions);
       const savedIds = new Set(saved.regions.map(block => block.id));
       setDirtySourceIds(previous =>
@@ -318,12 +344,16 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
       return true;
     } catch (err) {
       console.error('Failed to save regions:', err);
-      setBlocks(savedBlocksRef.current);
-      setRegionError(err instanceof Error ? err.message : 'Failed to save regions');
+      if (pageRef.current === jobId && revision === geometryRevisionRef.current) {
+        setRegionError(err instanceof Error ? err.message : 'Failed to save regions');
+      }
       return false;
     } finally {
-      setIsSavingRegions(false);
+      if (pageRef.current === jobId && geometrySaveRef.current === save) setIsSavingRegions(false);
     }
+    })();
+    geometrySaveRef.current = save;
+    return save;
   };
 
   const invalidateMaskPreview = () => {
@@ -334,6 +364,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
   };
 
   const handleCanvasCommit = async (nextBlocks: BlockItem[]) => {
+    setPreviewCache({});
     invalidateMaskPreview();
     onUpdate(item.id, { mask_preview_url: undefined });
     return handleRegionCommit(nextBlocks);
@@ -498,6 +529,8 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     setMaskPreviewState('loading');
     setRegionError(null);
     try {
+      await waitForGeometry();
+      if (request !== maskRequestRef.current) return;
       const preview = await mangaApi.generateMaskPreview(item.id);
       if (request !== maskRequestRef.current) return;
       setMaskPreviewUrl(preview.url);
@@ -520,7 +553,10 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     setIsSubmitting(true);
     setSubmitError(null);
     try {
+      await waitForGeometry();
+      if (pageRef.current !== item.id) return;
       const persisted = await persistDirtyBlocks();
+      await waitForGeometry();
       await mangaApi.approveTranslation(item.id, persisted.translations);
       onUpdate(item.id, {
         status: 'inpainting',
@@ -575,6 +611,8 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
             maskPreviewState={maskPreviewState}
             showMaskPreview={showMaskPreview}
             onChange={nextBlocks => {
+              geometryRevisionRef.current += 1;
+              setPreviewCache({});
               invalidateMaskPreview();
               setBlocks(nextBlocks);
             }}

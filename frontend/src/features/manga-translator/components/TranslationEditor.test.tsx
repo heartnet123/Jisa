@@ -44,6 +44,7 @@ vi.mock("./RegionCanvas", () => ({
     showMaskPreview,
     onToggleMaskPreview,
     blocks,
+    previewOverlays,
     onChange,
     onCommit,
   }: {
@@ -52,6 +53,7 @@ vi.mock("./RegionCanvas", () => ({
     showMaskPreview: boolean;
     onToggleMaskPreview?: () => void;
     blocks: BlockItem[];
+    previewOverlays?: Record<string, { base64?: string }>;
     onChange: (blocks: BlockItem[]) => void;
     onCommit: (blocks: BlockItem[]) => void;
   }) => (
@@ -59,17 +61,20 @@ vi.mock("./RegionCanvas", () => ({
       <button type="button" onClick={onToggleMaskPreview}>
         Canvas mask preview
       </button>
+      <span data-testid="typeset-overlay">{previewOverlays?.['region-1']?.base64}</span>
+      <span data-testid="canvas-x">{blocks[0]?.box.x}</span>
       <span data-testid="mask-state">{maskPreviewState}</span>
       <span data-testid="mask-url">{maskPreviewUrl ?? ""}</span>
       <span data-testid="mask-visible">{String(showMaskPreview)}</span>
       <button type="button" onClick={() => {
-        const moved = blocks.map(region => ({ ...region, box: { ...region.box, x: 0.4 } }));
+        const moved = blocks.map(region => ({ ...region, box: { ...region.box, x: region.box.x + 0.1 } }));
         onChange(moved);
         onCommit(moved);
       }}>Move canvas region</button>
       <button type="button" onClick={() => onChange(blocks.map(region => ({
-        ...region, box: { ...region.box, x: 0.4 },
+        ...region, box: { ...region.box, x: region.box.x + 0.1 },
       })))}>Drag canvas region</button>
+      <button type="button" onClick={() => onCommit(blocks)}>Commit canvas region</button>
     </div>
   ),
 }));
@@ -158,6 +163,88 @@ describe("TranslationEditor", () => {
       revision: 2,
     });
     api.approveTranslation.mockResolvedValue({ status: "inpainting" });
+  });
+
+  it("waits for slow geometry saves before requesting a typeset preview", async () => {
+    const user = userEvent.setup();
+    let finish!: () => void;
+    api.replaceRegions.mockImplementationOnce((_id, regions) => new Promise(resolve => {
+      finish = () => resolve({ region_mode: "manual_override", regions });
+    }));
+    renderEditor();
+    await selectRegion(user);
+    await waitFor(() => expect(api.generateTypesetPreview).toHaveBeenCalled());
+    api.generateTypesetPreview.mockClear();
+    await user.click(screen.getByText("Move canvas region"));
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)); });
+    expect(api.generateTypesetPreview).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "ยืนยัน" })).toBeDisabled();
+    await act(async () => finish());
+    await waitFor(() => expect(api.generateTypesetPreview).toHaveBeenCalledOnce());
+    await user.click(screen.getByRole("button", { name: "ยืนยัน" }));
+    await waitFor(() => expect(api.approveTranslation).toHaveBeenCalledOnce());
+  });
+
+  it("regenerates typeset preview when drag-then-commit finishes saving", async () => {
+    const user = userEvent.setup();
+    let finishSave!: () => void;
+    api.replaceRegions.mockImplementationOnce((_id, regions) => new Promise(resolve => {
+      finishSave = () => resolve({ region_mode: "manual_override", regions });
+    }));
+    renderEditor();
+    await selectRegion(user);
+    await waitFor(() => expect(api.generateTypesetPreview).toHaveBeenCalledTimes(1));
+    api.generateTypesetPreview.mockClear();
+
+    // Drag first (sets state, triggers effect with revision N)
+    await user.click(screen.getByText("Drag canvas region"));
+    // Then commit (increments revision to N+1, starts save)
+    await user.click(screen.getByText("Commit canvas region"));
+
+    // Wait 300ms (timer fires, awaits geometry save)
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)); });
+    expect(api.generateTypesetPreview).not.toHaveBeenCalled();
+
+    // Finish geometry save -> preview MUST be requested
+    await act(async () => finishSave());
+    await waitFor(() => expect(api.generateTypesetPreview).toHaveBeenCalledTimes(1));
+  });
+
+  it("serializes saves and keeps newer geometry and text drafts", async () => {
+    const user = userEvent.setup();
+    const finishes: Array<() => void> = [];
+    api.replaceRegions.mockImplementation((_id, regions) => new Promise(resolve => {
+      finishes.push(() => resolve({ region_mode: "manual_override", regions }));
+    }));
+    renderEditor();
+    await selectRegion(user);
+    fireEvent.change(screen.getByLabelText("Thai translation"), { target: { value: "unsaved draft" } });
+    await user.click(screen.getByText("Move canvas region"));
+    await user.click(screen.getByText("Move canvas region"));
+    expect(api.replaceRegions).toHaveBeenCalledOnce();
+    await act(async () => finishes[0]());
+    expect(api.replaceRegions).toHaveBeenCalledTimes(2);
+    expect(Number(screen.getByTestId("canvas-x").textContent)).toBeCloseTo(0.3);
+    await act(async () => finishes[1]());
+    expect(Number(screen.getByTestId("canvas-x").textContent)).toBeCloseTo(0.3);
+    expect(screen.getByLabelText("Thai translation")).toHaveValue("unsaved draft");
+    await user.click(screen.getByRole("button", { name: "ยืนยัน" }));
+    await waitFor(() => expect(api.approveTranslation).toHaveBeenCalledWith("job-1", { "region-1": "unsaved draft" }));
+  });
+
+  it("discards an in-flight typeset response after geometry changes", async () => {
+    const user = userEvent.setup();
+    let finish!: () => void;
+    api.generateTypesetPreview.mockImplementationOnce((_job, _region, req) => new Promise(resolve => {
+      finish = () => resolve({ client_revision: req.client_revision, mime_type: "image/png", overlay_base64: "stale", bounds_px: { x: 1, y: 1, width: 10, height: 10 }, lines: [], resolved_font_size: 20, auto_shrunk: false, overflow: false, truncated: false });
+    }));
+    renderEditor();
+    await selectRegion(user);
+    await waitFor(() => expect(api.generateTypesetPreview).toHaveBeenCalledOnce());
+    await user.click(screen.getByText("Move canvas region"));
+    await act(async () => finish());
+    expect(screen.getByTestId("typeset-overlay")).not.toHaveTextContent("stale");
+    await waitFor(() => expect(api.generateTypesetPreview).toHaveBeenCalledTimes(2));
   });
 
   it("saves an edited source through the selected-region patch", async () => {
