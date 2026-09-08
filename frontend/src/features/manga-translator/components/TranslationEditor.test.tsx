@@ -210,6 +210,27 @@ describe("TranslationEditor", () => {
     await waitFor(() => expect(api.generateTypesetPreview).toHaveBeenCalledTimes(1));
   });
 
+  it("does not request preview while dragging before commit occurs", async () => {
+    const user = userEvent.setup();
+    renderEditor();
+    await selectRegion(user);
+    await waitFor(() => expect(api.generateTypesetPreview).toHaveBeenCalledTimes(1));
+    api.generateTypesetPreview.mockClear();
+
+    // User drags region (onChange fires, but onCommit has not fired)
+    await user.click(screen.getByText("Drag canvas region"));
+
+    // User pauses drag for 350ms (> 250ms debounce)
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 350)); });
+
+    // Preview MUST NOT be requested with stale server coordinates while uncommitted
+    expect(api.generateTypesetPreview).not.toHaveBeenCalled();
+
+    // User releases mouse / commits
+    await user.click(screen.getByText("Commit canvas region"));
+    await waitFor(() => expect(api.generateTypesetPreview).toHaveBeenCalledTimes(1));
+  });
+
   it("serializes saves and keeps newer geometry and text drafts", async () => {
     const user = userEvent.setup();
     const finishes: Array<() => void> = [];

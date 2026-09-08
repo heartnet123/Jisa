@@ -126,3 +126,18 @@ class InpaintingBackgroundTests(unittest.TestCase):
         self.assertEqual(extracted.sum(), 80)
         self.assertTrue(np.all(extracted[45:55, 45:53] == 1))
         self.assertEqual(int(extracted[mask == 0].sum()), 0)
+
+    def test_manual_tight_mask_dark_text_with_dark_surroundings_and_bubble_margin(self):
+        engine = InpaintingEngine(device="cpu")
+        h, w = 100, 100
+        image = np.full((h, w, 3), 0, dtype=np.uint8)
+        image[40:70, 40:60] = 255
+        image[45:53, 45:55] = 0
+
+        mask = np.zeros((h, w), dtype=np.uint8)
+        mask[45:65, 45:55] = 1
+
+        extracted = engine._extract_text_mask(image, mask, manual=True)
+        self.assertEqual(extracted.sum(), 80)
+        self.assertTrue(np.all(extracted[45:53, 45:55] == 1))
+        self.assertEqual(int(extracted[53:65, 45:55].sum()), 0)

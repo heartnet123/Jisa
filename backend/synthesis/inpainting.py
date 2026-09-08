@@ -194,13 +194,17 @@ class InpaintingEngine:
             if t_cls == "manual":
                 text_mask = self._extract_text_mask(image_np, bubble_mask, manual=True)
                 if text_mask.any():
-                    pairs.append((text_mask, (bubble_mask > 0).astype(np.uint8)))
-            elif t_cls == "text_free":
-                text_mask = self._extract_text_mask(image_np, bubble_mask)
-                if not text_mask.any():
-                    text_mask = (bubble_mask > 0).astype(np.uint8)
-                safe_zone = (bubble_mask > 0).astype(np.uint8)
-                pairs.append((text_mask, safe_zone))
+                    safe_zone = (bubble_mask > 0).astype(np.uint8)
+                    gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
+                    background = np.median(gray[bubble_mask > 0])
+                    protected = (
+                        (np.abs(gray.astype(np.float32) - background) > 32)
+                        & (text_mask == 0)
+                        & (bubble_mask > 0)
+                    ).astype(np.uint8)
+                    protected = cv2.dilate(protected, np.ones((3, 3), np.uint8))
+                    safe_zone[(protected > 0) & (text_mask == 0)] = 0
+                    pairs.append((text_mask, safe_zone))
             else:
                 text_mask = self._extract_text_mask(image_np, bubble_mask)
                 if text_mask.any():
@@ -332,20 +336,29 @@ class InpaintingEngine:
             if pixels.size == 0:
                 return np.zeros((h, w), dtype=np.uint8)
 
-            background = float(np.median(pixels))
             box_pixels = gray[bubble_mask > 0]
-            if (
-                background < 120
-                and box_pixels.size > 0
-                and float(np.mean(box_pixels)) < 120
-            ):
-                light_outer = pixels[pixels >= 120]
-                if light_outer.size > 0:
-                    background = float(np.median(light_outer))
+            light_outer = pixels[pixels >= 120]
+            light_box = box_pixels[box_pixels >= 120]
+            dark_box = box_pixels[box_pixels < 120]
 
-            contrast = background - gray.astype(np.float32)
-            if background < 120:
-                contrast = -contrast
+            if light_outer.size >= 10:
+                background = float(np.median(light_outer))
+                contrast = background - gray.astype(np.float32)
+            elif light_box.size > 0 and dark_box.size > 0:
+                if light_box.size >= dark_box.size:
+                    background = float(np.median(light_box))
+                    contrast = background - gray.astype(np.float32)
+                else:
+                    background = float(np.median(dark_box))
+                    contrast = gray.astype(np.float32) - background
+            else:
+                background = float(np.median(pixels))
+                contrast = (
+                    gray.astype(np.float32) - background
+                    if background < 120
+                    else background - gray.astype(np.float32)
+                )
+
             foreground = ((contrast > 32) & (bubble_mask > 0)).astype(np.uint8)
             count, labels, stats, _ = cv2.connectedComponentsWithStats(foreground, 8)
             keep = np.zeros(count, dtype=np.uint8)

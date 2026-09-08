@@ -76,6 +76,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
   const savedBlocksRef = useRef(blocks);
   const geometrySaveRef = useRef<Promise<boolean>>(Promise.resolve(true));
   const geometryRevisionRef = useRef(0);
+  const [savedLayoutRevision, setSavedLayoutRevision] = useState(0);
   const pageRef = useRef(item.id);
   pageRef.current = item.id;
 
@@ -154,6 +155,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     geometryRevisionRef.current += 1;
     geometrySaveRef.current = Promise.resolve(true);
     setIsSavingRegions(false);
+    setSavedLayoutRevision(0);
     setSelectedBlockId(null);
     setEditedSources(initialTextMap(item.blocks, 'text'));
     setEditedTranslations(initialTextMap(item.blocks, 'translated_text'));
@@ -202,6 +204,25 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     if (!selectedBlockId || !selectedBlock) return;
     const blockId = selectedBlockId;
     let canceled = false;
+
+    const savedBlock = savedBlocksRef.current.find(b => b.id === blockId);
+    const isUnsaved =
+      !savedBlock ||
+      savedBlock.box.x !== selectedBlock.box.x ||
+      savedBlock.box.y !== selectedBlock.box.y ||
+      savedBlock.box.width !== selectedBlock.box.width ||
+      savedBlock.box.height !== selectedBlock.box.height;
+
+    if (isUnsaved) {
+      setPreviewCache(prev => ({
+        ...prev,
+        [blockId]: {
+          loading: false,
+          error: null,
+        },
+      }));
+      return;
+    }
 
     const rev = (clientRevisionsRef.current[blockId] ?? 0) + 1;
     clientRevisionsRef.current[blockId] = rev;
@@ -273,7 +294,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     return () => { canceled = true; clearTimeout(timer); };
   }, [
     item.id,
-    isSavingRegions,
+    savedLayoutRevision,
     selectedBlockId,
     selectedTranslation,
     selectedTypesetting?.font_name,
@@ -324,6 +345,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
       const saved = await mangaApi.replaceRegions(jobId, nextBlocks);
       if (pageRef.current !== jobId) return true;
       savedBlocksRef.current = saved.regions;
+      setSavedLayoutRevision(r => r + 1);
       if (revision !== geometryRevisionRef.current) return true;
       setBlocks(current => current === nextBlocks ? saved.regions : current);
       updateTextMapsForRegions(saved.regions);

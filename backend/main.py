@@ -14,7 +14,6 @@ import cv2
 import httpx
 import numpy as np
 import uvicorn
-from byok import PRESET_PROVIDERS, BYOKConfig, byok_completion, extract_byok_config
 from dotenv import load_dotenv
 from fastapi import (
     BackgroundTasks,
@@ -28,8 +27,10 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from job_errors import OcrError, ocr_failure_message
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from byok import PRESET_PROVIDERS, BYOKConfig, byok_completion, extract_byok_config
+from job_errors import OcrError, ocr_failure_message
 from repository import RegionRecord, ReviewRepository, SQLiteReviewRepository
 from synthesis.inpainting import InpaintingEngine
 from synthesis.segmentation import SegmentationEngine, TextBlock
@@ -1044,8 +1045,7 @@ async def resume_manga_task(
             r.id for r in repository.load_regions(job_id) if r.source == "manual"
         }
         text_classes = [
-            "manual" if b.id in manual_ids else getattr(b, "text_class", "text_bubble")
-            for b in blocks
+            "manual" if b.id in manual_ids else "text_bubble" for b in blocks
         ]
         text_pairs = inpainter.build_text_masks(
             img_rgb, bubble_masks, text_classes=text_classes
@@ -1104,7 +1104,6 @@ async def resume_manga_task(
                             text_align=text_align,
                             padding_ratio=padding_ratio,
                             mask=block.mask,
-                            text_class=getattr(block, "text_class", "text_bubble"),
                         )
                     )
         else:
