@@ -190,36 +190,30 @@ class InpaintingEngine:
             else ["text_bubble"] * len(bubble_masks)
         )
 
+        gray: np.ndarray | None = None
         for bubble_mask, t_cls in zip(bubble_masks, classes):
-            if t_cls == "manual":
-                text_mask = self._extract_text_mask(image_np, bubble_mask, manual=True)
-                if text_mask.any():
-                    safe_zone = (bubble_mask > 0).astype(np.uint8)
-                    gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
-                    background = np.median(gray[bubble_mask > 0])
-                    protected = (
-                        (np.abs(gray.astype(np.float32) - background) > 32)
-                        & (text_mask == 0)
-                        & (bubble_mask > 0)
-                    ).astype(np.uint8)
-                    protected = cv2.dilate(protected, np.ones((3, 3), np.uint8))
-                    safe_zone[(protected > 0) & (text_mask == 0)] = 0
-                    pairs.append((text_mask, safe_zone))
-            else:
-                text_mask = self._extract_text_mask(image_np, bubble_mask)
-                if text_mask.any():
-                    safe_zone = self._safe_zone(bubble_mask)
-                    gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
-                    background = np.median(gray[bubble_mask > 0])
-                    # Dilation must not reintroduce rejected outlines/artwork.
-                    protected = (
-                        (np.abs(gray.astype(np.float32) - background) > 32)
-                        & (text_mask == 0)
-                        & (bubble_mask > 0)
-                    ).astype(np.uint8)
-                    protected = cv2.dilate(protected, np.ones((3, 3), np.uint8))
-                    safe_zone[(protected > 0) & (text_mask == 0)] = 0
-                    pairs.append((text_mask, safe_zone))
+            is_manual = t_cls == "manual"
+            text_mask = self._extract_text_mask(image_np, bubble_mask, manual=is_manual)
+            if not text_mask.any():
+                continue
+
+            safe_zone = (
+                (bubble_mask > 0).astype(np.uint8)
+                if is_manual
+                else self._safe_zone(bubble_mask)
+            )
+            if gray is None:
+                gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
+
+            background = np.median(gray[bubble_mask > 0])
+            protected = (
+                (np.abs(gray.astype(np.float32) - background) > 32)
+                & (text_mask == 0)
+                & (bubble_mask > 0)
+            ).astype(np.uint8)
+            protected = cv2.dilate(protected, np.ones((3, 3), np.uint8))
+            safe_zone[(protected > 0) & (text_mask == 0)] = 0
+            pairs.append((text_mask, safe_zone))
 
         return pairs
 
