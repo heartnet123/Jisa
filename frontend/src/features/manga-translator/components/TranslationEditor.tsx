@@ -123,6 +123,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
   const [isSavingRegions, setIsSavingRegions] = useState(false);
   const [savingBlockIds, setSavingBlockIds] = useState<Set<string>>(() => new Set());
   const [savedBlockIds, setSavedBlockIds] = useState<Set<string>>(() => new Set());
+  const [saveErrorBlockIds, setSaveErrorBlockIds] = useState<Set<string>>(() => new Set());
   const autoSaveTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const savedBlockTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
@@ -202,6 +203,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     clearAllSavedBlockTimers();
     setSavingBlockIds(new Set());
     setSavedBlockIds(new Set());
+    setSaveErrorBlockIds(new Set());
     setBlocks(item.blocks || []);
     savedBlocksRef.current = item.blocks || [];
     geometryRevisionRef.current += 1;
@@ -228,6 +230,20 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     };
   }, [item.id]);
 
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (
+        dirtySourceIdsRef.current.size > 0 ||
+        dirtyTranslationIdsRef.current.size > 0 ||
+        dirtyTypesettingIdsRef.current.size > 0
+      ) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, []);
+
   const currentPageIndex = pages && pages.length > 0 ? pages.findIndex(p => p.id === item.id) : -1;
   const isSwitchingPageRef = useRef(false);
 
@@ -239,7 +255,11 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     isSwitchingPageRef.current = true;
     try {
       clearAllAutoSaveTimers();
-      if (dirtySourceIds.size > 0 || dirtyTranslationIds.size > 0 || dirtyTypesettingIds.size > 0) {
+      if (
+        dirtySourceIdsRef.current.size > 0 ||
+        dirtyTranslationIdsRef.current.size > 0 ||
+        dirtyTypesettingIdsRef.current.size > 0
+      ) {
         await persistDirtyBlocks();
       }
       if (onNavigatePage) {
@@ -449,22 +469,45 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     return handleRegionCommit(nextBlocks);
   };
 
-  const triggerAutoSave = async (blockId: string) => {
-    const isDirty =
-      dirtySourceIdsRef.current.has(blockId) ||
-      dirtyTranslationIdsRef.current.has(blockId) ||
-      dirtyTypesettingIdsRef.current.has(blockId);
-    if (!isDirty) return;
+  const isBlockDirty = (blockId: string) =>
+    dirtySourceIds.has(blockId) ||
+    dirtyTranslationIds.has(blockId) ||
+    dirtyTypesettingIds.has(blockId);
 
+  const isBlockDirtyRef = (blockId: string) =>
+    dirtySourceIdsRef.current.has(blockId) ||
+    dirtyTranslationIdsRef.current.has(blockId) ||
+    dirtyTypesettingIdsRef.current.has(blockId);
+
+  const saveBlock = async (blockId: string, manual = false) => {
+    if (autoSaveTimersRef.current[blockId]) {
+      clearTimeout(autoSaveTimersRef.current[blockId]);
+      delete autoSaveTimersRef.current[blockId];
+    }
+    if (!isBlockDirtyRef(blockId)) return;
+    if (savingBlockIds.has(blockId)) return;
+
+    if (manual) {
+      setActiveRegionAction({ blockId, action: 'save' });
+    }
     setSavingBlockIds(prev => new Set(prev).add(blockId));
     setRegionError(null);
     try {
       await persistDirtyBlocks([blockId]);
       markBlockSaved(blockId);
+      setSaveErrorBlockIds(prev => {
+        if (!prev.has(blockId)) return prev;
+        const next = new Set(prev);
+        next.delete(blockId);
+        return next;
+      });
     } catch (err) {
-      console.error('Failed to auto-save region:', err);
-      setRegionError(err instanceof Error ? err.message : 'Failed to auto-save region');
+      const msg = err instanceof Error ? err.message : 'Failed to save region text';
+      console.error('Save failed:', err);
+      setRegionError(msg);
+      setSaveErrorBlockIds(prev => new Set(prev).add(blockId));
     } finally {
+      if (manual) setActiveRegionAction(null);
       setSavingBlockIds(prev => {
         const next = new Set(prev);
         next.delete(blockId);
@@ -473,8 +516,17 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     }
   };
 
+  const triggerAutoSave = (blockId: string) => saveBlock(blockId, false);
+  const handleSaveBlock = (blockId: string) => saveBlock(blockId, true);
+
   const scheduleAutoSave = (blockId: string) => {
     setSavedBlockIds(prev => {
+      if (!prev.has(blockId)) return prev;
+      const next = new Set(prev);
+      next.delete(blockId);
+      return next;
+    });
+    setSaveErrorBlockIds(prev => {
       if (!prev.has(blockId)) return prev;
       const next = new Set(prev);
       next.delete(blockId);
@@ -490,17 +542,13 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     }, AUTOSAVE_DEBOUNCE_MS);
   };
 
-  const flushAutoSave = (blockId: string) => {
+  const flushAutoSave = async (blockId: string) => {
     if (autoSaveTimersRef.current[blockId]) {
       clearTimeout(autoSaveTimersRef.current[blockId]);
       delete autoSaveTimersRef.current[blockId];
     }
-    const isDirty =
-      dirtySourceIdsRef.current.has(blockId) ||
-      dirtyTranslationIdsRef.current.has(blockId) ||
-      dirtyTypesettingIdsRef.current.has(blockId);
-    if (isDirty) {
-      void triggerAutoSave(blockId);
+    if (isBlockDirtyRef(blockId)) {
+      await saveBlock(blockId, false);
     }
   };
 
@@ -654,29 +702,6 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     return { blocks: nextBlocks, translations: editedTranslationsRef.current };
   };
 
-  const handleSaveBlock = async (blockId: string) => {
-    if (autoSaveTimersRef.current[blockId]) {
-      clearTimeout(autoSaveTimersRef.current[blockId]);
-      delete autoSaveTimersRef.current[blockId];
-    }
-    setActiveRegionAction({ blockId, action: 'save' });
-    setSavingBlockIds(prev => new Set(prev).add(blockId));
-    setRegionError(null);
-    try {
-      await persistDirtyBlocks([blockId]);
-      markBlockSaved(blockId);
-    } catch (err) {
-      console.error('Failed to save region text:', err);
-      setRegionError(err instanceof Error ? err.message : 'Failed to save region text');
-    } finally {
-      setActiveRegionAction(null);
-      setSavingBlockIds(prev => {
-        const next = new Set(prev);
-        next.delete(blockId);
-        return next;
-      });
-    }
-  };
 
   const handleRerunOcr = async (blockId: string) => {
     setActiveRegionAction({ blockId, action: 'ocr' });
@@ -797,6 +822,23 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     }
   };
 
+  const handleExit = async () => {
+    try {
+      clearAllAutoSaveTimers();
+      if (
+        dirtySourceIdsRef.current.size > 0 ||
+        dirtyTranslationIdsRef.current.size > 0 ||
+        dirtyTypesettingIdsRef.current.size > 0
+      ) {
+        await persistDirtyBlocks();
+      }
+    } catch (err) {
+      console.error('Failed to auto-save on exit:', err);
+    } finally {
+      onClose();
+    }
+  };
+
   const hasDirtyText = dirtySourceIds.size > 0 || dirtyTranslationIds.size > 0 || dirtyTypesettingIds.size > 0;
   const controlsDisabled = isSavingRegions || isSubmitting || activeRegionAction !== null;
 
@@ -809,7 +851,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
 
         <button
           type="button"
-          onClick={onClose}
+          onClick={handleExit}
           className="rounded border border-border bg-panel px-3 py-1.5 font-mono text-xs font-bold uppercase text-main transition-colors hover:border-red-500 hover:bg-red-500/10 hover:text-red-500"
         >
           Exit
@@ -881,15 +923,17 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
                   typesettingValue={editedTypesetting[block.id] ?? defaultTypesetting(block.typesetting)}
                   typesettingOptions={typesettingOptions}
                   previewStatus={previewCache[block.id]}
-                  dirty={dirtySourceIds.has(block.id) || dirtyTranslationIds.has(block.id) || dirtyTypesettingIds.has(block.id)}
+                  dirty={isBlockDirty(block.id)}
                   saveStatus={
                     savingBlockIds.has(block.id) || (activeRegionAction?.blockId === block.id && activeRegionAction.action === 'save')
                       ? 'saving'
-                      : dirtySourceIds.has(block.id) || dirtyTranslationIds.has(block.id) || dirtyTypesettingIds.has(block.id)
-                        ? 'unsaved'
-                        : savedBlockIds.has(block.id)
-                          ? 'saved'
-                          : 'idle'
+                      : saveErrorBlockIds.has(block.id)
+                        ? 'error'
+                        : isBlockDirty(block.id)
+                          ? 'unsaved'
+                          : savedBlockIds.has(block.id)
+                            ? 'saved'
+                            : 'idle'
                   }
                   action={
                     activeRegionAction?.blockId === block.id

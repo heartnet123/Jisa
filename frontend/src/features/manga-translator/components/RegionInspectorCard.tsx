@@ -26,7 +26,7 @@ interface RegionInspectorCardProps {
     error?: string | null;
   } | null;
   dirty: boolean;
-  saveStatus?: "idle" | "unsaved" | "saving" | "saved";
+  saveStatus?: "idle" | "unsaved" | "saving" | "saved" | "error";
   action: "save" | "ocr" | "delete" | null;
   disabled: boolean;
   onDelete: (blockId: string) => void;
@@ -61,6 +61,7 @@ export function RegionInspectorCard({
 }: RegionInspectorCardProps) {
   const isSaving = saveStatus === "saving" || action === "save";
   const isSaved = saveStatus === "saved" && !dirty && !isSaving;
+  const isError = saveStatus === "error";
   const busy = action !== null;
 
   const fontSizeMin = typesettingOptions?.font_size.min ?? 8;
@@ -183,6 +184,11 @@ export function RegionInspectorCard({
           <span className="flex items-center gap-1 font-mono text-xs uppercase text-accent font-medium">
             <Icon icon="eos-icons:loading" className="text-xs animate-spin" />
             Saving…
+          </span>
+        ) : isError ? (
+          <span className="flex items-center gap-1 font-mono text-xs uppercase text-red-500 font-medium">
+            <Icon icon="solar:danger-triangle-linear" className="text-xs" />
+            Save failed
           </span>
         ) : isSaved ? (
           <span className="flex items-center gap-1 font-mono text-xs uppercase text-emerald-500 font-medium">

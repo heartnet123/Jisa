@@ -674,4 +674,79 @@ describe("TranslationEditor", () => {
     });
     expect(api.patchRegion).toHaveBeenCalledOnce();
   });
+
+  it("flushes pending auto-save immediately on Exit button click before closing", async () => {
+    const onClose = vi.fn();
+    const onUpdate = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <TranslationEditor
+        item={{ ...item, blocks: item.blocks?.map(region => ({ ...region })) }}
+        onClose={onClose}
+        onUpdate={onUpdate}
+      />,
+    );
+    await selectRegion(user);
+
+    const input = screen.getByLabelText("Thai translation");
+    fireEvent.change(input, { target: { value: "exit flush text" } });
+
+    expect(api.patchRegion).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Exit" }));
+
+    await waitFor(() =>
+      expect(api.patchRegion).toHaveBeenCalledWith("job-1", "region-1", {
+        translated_text: "exit flush text",
+      }),
+    );
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("flushes pending auto-save before page navigation", async () => {
+    const user = userEvent.setup();
+    const onNavigatePage = vi.fn().mockResolvedValue(undefined);
+    const page1 = { id: "job-1", filename: "page1.png" };
+    const page2 = { id: "job-2", filename: "page2.png" };
+    render(
+      <TranslationEditor
+        item={{ ...item, blocks: item.blocks?.map(region => ({ ...region })) }}
+        onClose={vi.fn()}
+        onUpdate={vi.fn()}
+        pages={[page1, page2]}
+        onNavigatePage={onNavigatePage}
+      />,
+    );
+    await selectRegion(user);
+
+    const input = screen.getByLabelText("Thai translation");
+    fireEvent.change(input, { target: { value: "page nav text" } });
+
+    expect(api.patchRegion).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Next >" }));
+
+    await waitFor(() =>
+      expect(api.patchRegion).toHaveBeenCalledWith("job-1", "region-1", {
+        translated_text: "page nav text",
+      }),
+    );
+    expect(onNavigatePage).toHaveBeenCalledWith("job-2");
+  });
+
+  it("displays error indicator on card when auto-save fails", async () => {
+    api.patchRegion.mockRejectedValueOnce(new Error("Network disconnect"));
+    renderEditor();
+    const user = userEvent.setup();
+    await selectRegion(user);
+
+    const input = screen.getByLabelText("Thai translation");
+    fireEvent.change(input, { target: { value: "failing text" } });
+
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 750));
+    });
+
+    await waitFor(() => expect(screen.getByText("Save failed")).toBeInTheDocument());
+  });
 });
