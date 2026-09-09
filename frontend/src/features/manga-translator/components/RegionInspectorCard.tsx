@@ -466,7 +466,7 @@ export function RegionInspectorCard({
             </button>
             <button
               type="button"
-              disabled={disabled || busy || !dirty || isSaving}
+              disabled={disabled || busy || !dirty}
               onClick={event => {
                 event.stopPropagation();
                 onSave(block.id);
