@@ -14,7 +14,6 @@ import cv2
 import httpx
 import numpy as np
 import uvicorn
-from byok import PRESET_PROVIDERS, BYOKConfig, byok_completion, extract_byok_config
 from dotenv import load_dotenv
 from fastapi import (
     BackgroundTasks,
@@ -28,8 +27,10 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from job_errors import OcrError, ocr_failure_message
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from byok import PRESET_PROVIDERS, BYOKConfig, byok_completion, extract_byok_config
+from job_errors import OcrError, ocr_failure_message
 from repository import RegionRecord, ReviewRepository, SQLiteReviewRepository
 from synthesis.inpainting import InpaintingEngine
 from synthesis.segmentation import SegmentationEngine, TextBlock
@@ -39,6 +40,7 @@ from synthesis.typesetting import TypesetBlock, TypesettingEngine
 load_dotenv()
 
 app = FastAPI(title="AI Manga Translator API")
+
 
 # Event Manager for Server-Sent Events (SSE)
 class EventManager:
@@ -57,6 +59,7 @@ class EventManager:
         payload = {"event": event_type, "data": data}
         for queue in list(self.listeners):
             await queue.put(payload)
+
 
 event_manager = EventManager()
 
@@ -83,6 +86,8 @@ def get_ocr_semaphore() -> asyncio.Semaphore:
     if _ocr_semaphore is None:
         _ocr_semaphore = asyncio.Semaphore(OCR_CONCURRENCY)
     return _ocr_semaphore
+
+
 BYOK_API_KEY = os.getenv("BYOK_API_KEY")
 BYOK_API_BASE = os.getenv("BYOK_API_BASE", "https://api.openai.com/v1")
 BYOK_MODEL = os.getenv("BYOK_MODEL", "gpt-5.4-mini")
@@ -155,7 +160,9 @@ inpainter = InpaintingEngine(device=DEVICE)
 
 typeset_font_path = None
 if TYPESETTING_FONT:
-    candidate_path = Path(__file__).resolve().parent / "assets" / "fonts" / TYPESETTING_FONT
+    candidate_path = (
+        Path(__file__).resolve().parent / "assets" / "fonts" / TYPESETTING_FONT
+    )
     if candidate_path.exists():
         typeset_font_path = str(candidate_path)
 
@@ -178,7 +185,11 @@ def _to_public_url(path: Path | str | None) -> str | None:
     candidate = Path(path)
     if not candidate.is_absolute():
         candidate = candidate.as_posix()
-    rel = candidate.as_posix() if isinstance(candidate, Path) else str(candidate).replace("\\", "/")
+    rel = (
+        candidate.as_posix()
+        if isinstance(candidate, Path)
+        else str(candidate).replace("\\", "/")
+    )
     if rel.startswith("/"):
         return rel
     if rel.startswith("uploads/"):
@@ -226,7 +237,9 @@ def normalized_box_to_pixels(
     if not all(math.isfinite(value) for value in values):
         raise ValueError("Normalized box values must be finite")
     if x < 0 or y < 0 or width <= 0 or height <= 0:
-        raise ValueError("Normalized box must have a non-negative origin and positive size")
+        raise ValueError(
+            "Normalized box must have a non-negative origin and positive size"
+        )
     if x + width > 1 or y + height > 1:
         raise ValueError("Normalized box must be contained within the page")
 
@@ -261,7 +274,9 @@ def _persist_runtime_regions(job_id: str, blocks: list[TextBlock]) -> None:
         if block.mask is not None and (prior is None or prior.source == "detected"):
             candidate = _mask_path_for(job_id, block.id)
             if not cv2.imwrite(str(candidate), (block.mask > 0).astype(np.uint8) * 255):
-                raise RuntimeError(f"Failed to persist detected mask for block {block.id}")
+                raise RuntimeError(
+                    f"Failed to persist detected mask for block {block.id}"
+                )
             mask_path = str(candidate)
 
         x, y, width, height = pixel_box_to_normalized(
@@ -319,7 +334,9 @@ def _durable_regions_to_engine_blocks(
     if image_width <= 0 or image_height <= 0:
         return []
 
-    durable_regions = regions if regions is not None else repository.load_regions(job["id"])
+    durable_regions = (
+        regions if regions is not None else repository.load_regions(job["id"])
+    )
     blocks: list[TextBlock] = []
     for region in durable_regions:
         box = normalized_box_to_pixels(
@@ -376,7 +393,9 @@ def hydrate_engine_blocks(
     if image_width <= 0 or image_height <= 0:
         return []
 
-    durable_regions = regions if regions is not None else repository.load_regions(job["id"])
+    durable_regions = (
+        regions if regions is not None else repository.load_regions(job["id"])
+    )
     blocks: list[TextBlock] = []
     for region in durable_regions:
         box = normalized_box_to_pixels(
@@ -460,7 +479,6 @@ class BatchTranslateJobItem(BaseModel):
     inpainted_url: str | None = None
     message: str | None = None
     error: str | None = None
-
 
 
 class TranslateJobResponse(BaseModel):
@@ -642,7 +660,6 @@ class ReorderPayload(BaseModel):
     page_order: list[str]
 
 
-
 def encode_image(image_path: str) -> str:
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode("utf-8")
@@ -658,7 +675,7 @@ def _truncate_repeated_lines(lines: list[str], max_period: int = 10) -> list[str
     for line in lines:
         candidate = out + [line]
         for period in range(1, min(max_period, len(candidate) // 2) + 1):
-            if candidate[-period:] == candidate[-2 * period:-period]:
+            if candidate[-period:] == candidate[-2 * period : -period]:
                 if period == 1:
                     break  # adjacent duplicate — drop the line, keep scanning
                 # multi-line block loop completed — cut here, rest is degeneration
@@ -690,30 +707,33 @@ async def perform_ocr(image_path: str) -> str:
             },
         }
 
-        async with get_ocr_semaphore():
-            async with httpx.AsyncClient(timeout=httpx.Timeout(OCR_TIMEOUT, connect=15.0)) as client:
-                response = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
-                response.raise_for_status()
-                raw_text = response.json().get("response", "")
-                # glm-ocr outputs correct text then wraps it in ``` fences and loops;
-                # truncate at the first fence — everything before it is the real OCR result
-                fence_idx = raw_text.find("\n```")
-                if fence_idx != -1:
-                    raw_text = raw_text[:fence_idx]
-                # drop empty / fence-only lines, then cut verbatim block loops
-                raw_lines = [
-                    stripped
-                    for line in raw_text.splitlines()
-                    if (stripped := line.strip()) and not stripped.startswith("```")
-                ]
-                cleaned_lines = _truncate_repeated_lines(raw_lines)
-                ocr_text = "\n".join(cleaned_lines)
-                if (
-                    isinstance(ocr_text, str)
-                    and ocr_text.strip().startswith("Error during OCR:")
-                ):
-                    raise OcrError(ocr_failure_message(ocr_text))
-                return ocr_text
+        async with (
+            get_ocr_semaphore(),
+            httpx.AsyncClient(
+                timeout=httpx.Timeout(OCR_TIMEOUT, connect=15.0)
+            ) as client,
+        ):
+            response = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
+            response.raise_for_status()
+            raw_text = response.json().get("response", "")
+            # glm-ocr outputs correct text then wraps it in ``` fences and loops;
+            # truncate at the first fence — everything before it is the real OCR result
+            fence_idx = raw_text.find("\n```")
+            if fence_idx != -1:
+                raw_text = raw_text[:fence_idx]
+            # drop empty / fence-only lines, then cut verbatim block loops
+            raw_lines = [
+                stripped
+                for line in raw_text.splitlines()
+                if (stripped := line.strip()) and not stripped.startswith("```")
+            ]
+            cleaned_lines = _truncate_repeated_lines(raw_lines)
+            ocr_text = "\n".join(cleaned_lines)
+            if isinstance(ocr_text, str) and ocr_text.strip().startswith(
+                "Error during OCR:"
+            ):
+                raise OcrError(ocr_failure_message(ocr_text))
+            return ocr_text
     except OcrError:
         raise
     except Exception as e:
@@ -759,7 +779,9 @@ def _extract_json_object(raw_text: str) -> dict | None:
         return None
 
 
-async def translate_page_texts(texts: list[str], byok_config: BYOKConfig | None = None) -> list[str]:
+async def translate_page_texts(
+    texts: list[str], byok_config: BYOKConfig | None = None
+) -> list[str]:
     """
     Translate all bubble texts together so the model can keep page-level context.
     Falls back to per-bubble mode if structured parsing fails.
@@ -837,7 +859,9 @@ async def _crop_and_ocr(
     return text
 
 
-async def process_manga_task(job_id: str, image_path: str, byok_config: BYOKConfig | None = None):
+async def process_manga_task(
+    job_id: str, image_path: str, byok_config: BYOKConfig | None = None
+):
     """Real AI Pipeline Step 1-3: Segmentation -> OCR (per bubble) -> Translation (Stop for HITL review)"""
     try:
         if byok_config and job_id in jobs_db:
@@ -882,7 +906,6 @@ async def process_manga_task(job_id: str, image_path: str, byok_config: BYOKConf
         jobs_db[job_id]["message"] = "Running OCR on detected text regions."
         await notify_state_change(job_ids=job_id)
 
-
         if blocks:
             # OCR each detected bubble independently
             ocr_tasks = [
@@ -896,9 +919,10 @@ async def process_manga_task(job_id: str, image_path: str, byok_config: BYOKConf
             # No bubbles detected — fall back to full-page OCR
             full_ocr = await perform_ocr(image_path)
             bubble_texts = [full_ocr]
-            
+
             # Create a single fallback TextBlock
             from synthesis.segmentation import TextBlock
+
             ih, iw = img_rgb.shape[:2]
             blocks = [
                 TextBlock(
@@ -925,16 +949,22 @@ async def process_manga_task(job_id: str, image_path: str, byok_config: BYOKConf
         source_texts = [b.text or "" for b in blocks]
         if PAGE_CONTEXT_TRANSLATION and len(source_texts) > 1:
             try:
-                translated_texts = await translate_page_texts(source_texts, byok_config=byok_cfg)
+                translated_texts = await translate_page_texts(
+                    source_texts, byok_config=byok_cfg
+                )
             except Exception as exc:
                 print(
                     f"[job {job_id}] Page-context translation failed, "
                     f"falling back to per-bubble translation: {exc}"
                 )
-                translation_tasks = [translate_text(text, byok_config=byok_cfg) for text in source_texts]
+                translation_tasks = [
+                    translate_text(text, byok_config=byok_cfg) for text in source_texts
+                ]
                 translated_texts = await asyncio.gather(*translation_tasks)
         else:
-            translation_tasks = [translate_text(text, byok_config=byok_cfg) for text in source_texts]
+            translation_tasks = [
+                translate_text(text, byok_config=byok_cfg) for text in source_texts
+            ]
             translated_texts = await asyncio.gather(*translation_tasks)
 
         for block, tx in zip(blocks, translated_texts):
@@ -950,7 +980,7 @@ async def process_manga_task(job_id: str, image_path: str, byok_config: BYOKConf
                 "id": b.id,
                 "box": list(b.box),
                 "text": b.text,
-                "translated_text": b.translated_text
+                "translated_text": b.translated_text,
             }
             for b in blocks
         ]
@@ -959,7 +989,6 @@ async def process_manga_task(job_id: str, image_path: str, byok_config: BYOKConf
         jobs_db[job_id]["message"] = "Awaiting manual review of translations."
         _persist_runtime_regions(job_id, blocks)
         await notify_state_change(job_ids=job_id)
-
 
     except Exception as e:
         import traceback
@@ -971,7 +1000,6 @@ async def process_manga_task(job_id: str, image_path: str, byok_config: BYOKConf
         jobs_db[job_id]["message"] = f"Job stopped: {error_message}"
         jobs_db[job_id]["progress"] = min(jobs_db[job_id].get("progress", 0), 95)
         await notify_state_change(job_ids=job_id)
-
 
 
 async def resume_manga_task(
@@ -999,7 +1027,6 @@ async def resume_manga_task(
         jobs_db[job_id]["message"] = "Removing source text from the image."
         await notify_state_change(job_ids=job_id)
 
-
         # Unload segmenter (YOLO + SAM) before loading LaMa (VRAM budget)
         segmenter.unload_all()
 
@@ -1014,7 +1041,15 @@ async def resume_manga_task(
                 fallback[y : y + h, x : x + w] = 1
                 bubble_masks.append(fallback)
 
-        text_pairs = inpainter.build_text_masks(img_rgb, bubble_masks)
+        manual_ids = {
+            r.id for r in repository.load_regions(job_id) if r.source == "manual"
+        }
+        text_classes = [
+            "manual" if b.id in manual_ids else "text_bubble" for b in blocks
+        ]
+        text_pairs = inpainter.build_text_masks(
+            img_rgb, bubble_masks, text_classes=text_classes
+        )
         text_masks = [m for m, _ in text_pairs]
         safe_zones = [z for _, z in text_pairs]
 
@@ -1044,7 +1079,6 @@ async def resume_manga_task(
         jobs_db[job_id]["progress"] = 80
         jobs_db[job_id]["message"] = "Rendering translated text into the page."
         await notify_state_change(job_ids=job_id)
-
 
         typeset_blocks = []
         if blocks:
@@ -1089,7 +1123,6 @@ async def resume_manga_task(
         jobs_db[job_id]["result_url"] = _to_public_url(final_path)
         await notify_state_change(job_ids=job_id)
 
-
     except Exception as e:
         import traceback
 
@@ -1100,7 +1133,6 @@ async def resume_manga_task(
         jobs_db[job_id]["message"] = f"Job stopped: {error_message}"
         jobs_db[job_id]["progress"] = min(jobs_db[job_id].get("progress", 0), 95)
         await notify_state_change(job_ids=job_id)
-
 
 
 @app.get("/")
@@ -1145,7 +1177,7 @@ async def translate_manga(
     background_tasks: BackgroundTasks,
     files: list[UploadFile] | None = File(None),
     file: UploadFile | None = File(None),
-    project_id: str | None = Form(None)
+    project_id: str | None = Form(None),
 ):
     file_list: list[UploadFile] = []
     if files:
@@ -1192,7 +1224,9 @@ async def translate_manga(
                     detail="Unsupported media type: invalid image signature",
                 )
 
-            normalized_filename, file_ext = _normalize_upload_filename(upload_file.filename)
+            normalized_filename, file_ext = _normalize_upload_filename(
+                upload_file.filename
+            )
             file_ext = file_ext or ".png"
             temp_filename = f"temp_{uuid.uuid4()}{file_ext}"
             temp_path = UPLOAD_DIR / temp_filename
@@ -1266,7 +1300,9 @@ async def translate_manga(
         raise
 
     for job_id, final_path in file_paths_for_tasks:
-        background_tasks.add_task(process_manga_task, job_id, str(final_path), byok_config=byok_config)
+        background_tasks.add_task(
+            process_manga_task, job_id, str(final_path), byok_config=byok_config
+        )
 
     await notify_state_change(
         job_ids=[j["id"] for j in created_jobs],
@@ -1294,7 +1330,9 @@ class BYOKTestRequest(BaseModel):
 
 
 @app.post("/api/byok/test")
-async def test_byok_connection(request: Request, payload: BYOKTestRequest | None = None):
+async def test_byok_connection(
+    request: Request, payload: BYOKTestRequest | None = None
+):
     if payload and payload.provider:
         config = BYOKConfig(
             provider=payload.provider.lower(),
@@ -1306,12 +1344,17 @@ async def test_byok_connection(request: Request, payload: BYOKTestRequest | None
         config = extract_byok_config(request)
 
     test_messages = [
-        {"role": "system", "content": "You are an API connection tester. Reply briefly with 'OK'."},
+        {
+            "role": "system",
+            "content": "You are an API connection tester. Reply briefly with 'OK'.",
+        },
         {"role": "user", "content": "Ping"},
     ]
 
     try:
-        reply = await byok_completion(messages=test_messages, config=config, timeout=15.0)
+        reply = await byok_completion(
+            messages=test_messages, config=config, timeout=15.0
+        )
         return {
             "status": "success",
             "message": f"Successfully connected to provider '{config.provider}' using model '{config.model}'.",
@@ -1327,7 +1370,6 @@ async def test_byok_connection(request: Request, payload: BYOKTestRequest | None
             status_code=400,
             detail=f"Connection test failed for provider '{config.provider}': {e!s}",
         )
-
 
 
 @app.get("/api/status/{job_id}", response_model=JobStatus)
@@ -1349,7 +1391,9 @@ def _require_review_job(job_id: str) -> dict:
             detail="Regions can only be edited while the job is awaiting review",
         )
     if not job.get("image_width") or not job.get("image_height"):
-        raise HTTPException(status_code=409, detail="Job image dimensions are unavailable")
+        raise HTTPException(
+            status_code=409, detail="Job image dimensions are unavailable"
+        )
     return job
 
 
@@ -1605,7 +1649,9 @@ async def get_typesetting_options() -> TypesettingOptionsResponse:
         fonts=[TypesettingFontItem(name=f["name"], label=f["label"]) for f in fonts],
         default_font_name=default_name,
         font_size=IntRange(min=typesetter.min_font_size, max=typesetter.max_font_size),
-        padding_ratio=FloatRange(min=0.0, max=0.30, step=0.01, default=typesetter.padding_ratio),
+        padding_ratio=FloatRange(
+            min=0.0, max=0.30, step=0.01, default=typesetter.padding_ratio
+        ),
         alignments=["left", "center", "right"],
     )
 
@@ -1710,7 +1756,16 @@ async def generate_mask_preview(job_id: str) -> MaskPreviewResponse:
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
     blocks = hydrate_engine_blocks(job, regions)
     bubble_masks = [block.mask for block in blocks if block.mask is not None]
-    text_pairs = inpainter.build_text_masks(image_rgb, bubble_masks)
+    manual_ids = {r.id for r in regions if r.source == "manual"}
+    text_pairs = inpainter.build_text_masks(
+        image_rgb,
+        bubble_masks,
+        text_classes=[
+            "manual" if b.id in manual_ids else "text_bubble"
+            for b in blocks
+            if b.mask is not None
+        ],
+    )
     combined_mask = inpainter._combine_masks(
         image_rgb.shape[:2],
         [m for m, _ in text_pairs],
@@ -1722,9 +1777,7 @@ async def generate_mask_preview(job_id: str) -> MaskPreviewResponse:
     overlay[combined_mask > 0] = (255, 0, 128, 160)
 
     preview_path = _mask_preview_path(job_id)
-    if not cv2.imwrite(
-        str(preview_path), cv2.cvtColor(overlay, cv2.COLOR_RGBA2BGRA)
-    ):
+    if not cv2.imwrite(str(preview_path), cv2.cvtColor(overlay, cv2.COLOR_RGBA2BGRA)):
         raise HTTPException(status_code=500, detail="Mask preview could not be written")
 
     revision = int(job.get("preview_revision") or 0) + 1
@@ -1787,7 +1840,6 @@ async def approve_job(
     return {"status": "resumed"}
 
 
-
 @app.post("/api/jobs/{job_id}/cancel")
 async def cancel_job(job_id: str):
     if job_id not in jobs_db:
@@ -1803,7 +1855,6 @@ async def cancel_job(job_id: str):
     job["message"] = "Job canceled by user."
     await notify_state_change(job_ids=job_id)
     return {"status": "canceled"}
-
 
 
 class SandboxPayload(BaseModel):
@@ -1822,7 +1873,7 @@ async def sandbox_translate(payload: SandboxPayload):
             # Translate words mockingly to show connection and functionality
             mocked = f"[Sandbox Simulation] แปล: {payload.text} (ใช้ระบบแปลอัตโนมัติจำลอง เนื่องจากไม่ได้ตั้งค่าคีย์ API)"
             return {"translated_text": mocked}
-        
+
         headers = {
             "Authorization": f"Bearer {BYOK_API_KEY}",
             "Content-Type": "application/json",
@@ -1830,8 +1881,16 @@ async def sandbox_translate(payload: SandboxPayload):
         api_payload = {
             "model": payload.model if payload.model else BYOK_MODEL,
             "messages": [
-                {"role": "system", "content": payload.system_prompt if payload.system_prompt else THAI_SYSTEM_PROMPT},
-                {"role": "user", "content": f"Translate the following manga text to Thai:\n\n{payload.text}"},
+                {
+                    "role": "system",
+                    "content": payload.system_prompt
+                    if payload.system_prompt
+                    else THAI_SYSTEM_PROMPT,
+                },
+                {
+                    "role": "user",
+                    "content": f"Translate the following manga text to Thai:\n\n{payload.text}",
+                },
             ],
         }
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -1876,13 +1935,14 @@ async def list_jobs(project_id: str | None = None):
 @app.post("/api/projects", response_model=ProjectResponse, status_code=201)
 async def create_project(payload: ProjectCreatePayload):
     import datetime
+
     project_id = str(uuid.uuid4())
     project = {
         "id": project_id,
         "name": payload.name,
         "created_at": datetime.datetime.now().isoformat(),
         "job_ids": [],
-        "page_order": []
+        "page_order": [],
     }
     projects_db[project_id] = project
     await notify_state_change(project_ids=[project_id])
@@ -1921,7 +1981,7 @@ async def reorder_project_pages(project_id: str, payload: ReorderPayload):
 async def update_project(project_id: str, payload: ProjectCreatePayload):
     if project_id not in projects_db:
         raise HTTPException(status_code=404, detail="Project not found")
-    
+
     projects_db[project_id]["name"] = payload.name
     await notify_state_change(project_ids=project_id)
     return projects_db[project_id]
@@ -1973,7 +2033,9 @@ def _drain_pending_asset_deletions(max_attempts: int = MAX_DELETION_ATTEMPTS) ->
                 _deletion_attempts.pop(path, None)
             else:
                 if attempts >= max_attempts:
-                    print(f"Exceeded max deletion attempts ({max_attempts}) for {path}, removing pending record.")
+                    print(
+                        f"Exceeded max deletion attempts ({max_attempts}) for {path}, removing pending record."
+                    )
                     repository.remove_pending_asset_deletion(path)
                     _deletion_attempts.pop(path, None)
                 all_success = False
@@ -1987,7 +2049,9 @@ async def delete_project(project_id: str, background_tasks: BackgroundTasks):
 
     asset_paths = repository.delete_project_cascade(project_id)
 
-    job_ids_to_del = [jid for jid, j in jobs_db.items() if j.get("project_id") == project_id]
+    job_ids_to_del = [
+        jid for jid, j in jobs_db.items() if j.get("project_id") == project_id
+    ]
     for jid in job_ids_to_del:
         del jobs_db[jid]
 
@@ -2015,7 +2079,6 @@ async def delete_project(project_id: str, background_tasks: BackgroundTasks):
     }
 
 
-
 @app.delete("/api/jobs/{job_id}")
 async def delete_job(job_id: str):
     """Deletes a job from the database and cleans up associated files on disk."""
@@ -2033,7 +2096,10 @@ async def delete_job(job_id: str):
     if project_id and project_id in projects_db:
         if job_id in projects_db[project_id]["job_ids"]:
             projects_db[project_id]["job_ids"].remove(job_id)
-        if "page_order" in projects_db[project_id] and job_id in projects_db[project_id]["page_order"]:
+        if (
+            "page_order" in projects_db[project_id]
+            and job_id in projects_db[project_id]["page_order"]
+        ):
             projects_db[project_id]["page_order"].remove(job_id)
 
     del jobs_db[job_id]
@@ -2049,19 +2115,24 @@ async def delete_job(job_id: str):
             projects_db[project_id]["job_ids"] = proj_repo[0]["job_ids"]
             projects_db[project_id]["page_order"] = proj_repo[0]["page_order"]
         else:
-            projects_db[project_id]["job_ids"] = [jid for jid in projects_db[project_id]["job_ids"] if jid != job_id]
-            projects_db[project_id]["page_order"] = [jid for jid in projects_db[project_id].get("page_order", []) if jid != job_id]
+            projects_db[project_id]["job_ids"] = [
+                jid for jid in projects_db[project_id]["job_ids"] if jid != job_id
+            ]
+            projects_db[project_id]["page_order"] = [
+                jid
+                for jid in projects_db[project_id].get("page_order", [])
+                if jid != job_id
+            ]
 
     await notify_state_change(project_ids=[project_id] if project_id else None)
     return {"status": "deleted", "job_id": job_id}
-
 
 
 @app.get("/api/system/health")
 async def get_system_health():
     """Checks system health including GPU capabilities, Ollama models, and loaded fonts."""
     import torch
-    
+
     ollama_status = "disconnected"
     ollama_models = []
     try:
@@ -2069,25 +2140,38 @@ async def get_system_health():
             response = await client.get(f"{OLLAMA_URL}/api/tags")
             if response.status_code == 200:
                 ollama_status = "connected"
-                ollama_models = [m.get("name") for m in response.json().get("models", [])]
+                ollama_models = [
+                    m.get("name") for m in response.json().get("models", [])
+                ]
     except Exception:
         pass
-        
+
     cuda_available = torch.cuda.is_available()
     device_name = torch.cuda.get_device_name(0) if cuda_available else "CPU (No GPU)"
     cuda_device = DEVICE
-    
+
     fonts_dir = Path("assets/fonts")
     available_fonts = []
     if fonts_dir.exists():
         available_fonts = [f.name for f in fonts_dir.glob("*.ttf")]
-        
+
     total_jobs = len(jobs_db)
     completed_jobs = sum(1 for j in jobs_db.values() if j.get("status") == "completed")
-    active_jobs = sum(1 for j in jobs_db.values() if j.get("status") in ["queued", "segmenting", "ocr", "translating", "inpainting", "typesetting"])
-    awaiting_review = sum(1 for j in jobs_db.values() if j.get("status") == "awaiting_review")
-    failed_jobs = sum(1 for j in jobs_db.values() if j.get("status") in ["failed", "error", "canceled"])
-    
+    active_jobs = sum(
+        1
+        for j in jobs_db.values()
+        if j.get("status")
+        in ["queued", "segmenting", "ocr", "translating", "inpainting", "typesetting"]
+    )
+    awaiting_review = sum(
+        1 for j in jobs_db.values() if j.get("status") == "awaiting_review"
+    )
+    failed_jobs = sum(
+        1
+        for j in jobs_db.values()
+        if j.get("status") in ["failed", "error", "canceled"]
+    )
+
     return {
         "ollama": {
             "status": ollama_status,
@@ -2095,7 +2179,9 @@ async def get_system_health():
             "ocr_model": OCR_MODEL,
         },
         "translation": {
-            "byok_configured": bool(BYOK_API_KEY and BYOK_API_KEY != "your_api_key_here"),
+            "byok_configured": bool(
+                BYOK_API_KEY and BYOK_API_KEY != "your_api_key_here"
+            ),
             "model": BYOK_MODEL,
             "page_context_translation": PAGE_CONTEXT_TRANSLATION,
         },
@@ -2114,11 +2200,13 @@ async def get_system_health():
             "awaiting_review": awaiting_review,
             "completed": completed_jobs,
             "failed": failed_jobs,
-        }
+        },
     }
 
 
-async def notify_state_change(job_ids: list[str] | str | None = None, project_ids: list[str] | str | None = None):
+async def notify_state_change(
+    job_ids: list[str] | str | None = None, project_ids: list[str] | str | None = None
+):
     try:
         # ponytail: prevent quadratic write amplification by only saving explicitly updated entities
         if job_ids:
@@ -2163,30 +2251,30 @@ async def startup_event():
             except Exception as e:
                 print(f"Error in periodic health broadcast: {e}")
                 await asyncio.sleep(5)
-                
+
     asyncio.create_task(periodic_health_broadcast())
 
 
 @app.get("/api/stream/events")
 async def stream_events():
     queue = event_manager.subscribe()
-    
+
     async def event_generator():
         try:
             # Push initial state immediately on connect
             initial_jobs = await list_jobs()
             initial_health = await get_system_health()
-            
+
             # Ensure page_order is present defensively
             for proj in projects_db.values():
                 if "page_order" not in proj:
                     proj["page_order"] = list(proj["job_ids"])
-                    
+
             initial_projects = list(projects_db.values())[::-1]
             yield f"event: jobs\ndata: {json.dumps(initial_jobs, ensure_ascii=False)}\n\n"
             yield f"event: health\ndata: {json.dumps(initial_health, ensure_ascii=False)}\n\n"
             yield f"event: projects\ndata: {json.dumps(initial_projects, ensure_ascii=False)}\n\n"
-            
+
             while True:
                 payload = await queue.get()
                 event_type = payload["event"]
@@ -2196,7 +2284,7 @@ async def stream_events():
             pass
         finally:
             event_manager.unsubscribe(queue)
-            
+
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
@@ -2212,5 +2300,3 @@ if __name__ == "__main__":
     port_env = (os.getenv("PORT") or "8000").strip()
     port = int(port_env) if port_env else 8000
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
-
-

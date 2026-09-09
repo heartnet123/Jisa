@@ -22,8 +22,6 @@ from __future__ import annotations
 import gc
 import logging
 import uuid
-from pathlib import Path
-from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -38,11 +36,11 @@ logger = logging.getLogger(__name__)
 
 class TextBlock(BaseModel):
     id: str
-    box: Tuple[int, int, int, int]  # x, y, w, h  (top-left origin)
+    box: tuple[int, int, int, int]  # x, y, w, h  (top-left origin)
     confidence: float = 1.0
-    text: Optional[str] = None
-    translated_text: Optional[str] = None
-    mask: Optional[np.ndarray] = None  # H×W binary uint8 (0/1)
+    text: str | None = None
+    translated_text: str | None = None
+    mask: np.ndarray | None = None  # H×W binary uint8 (0/1)
 
     class Config:
         arbitrary_types_allowed = True
@@ -105,7 +103,7 @@ class SegmentationEngine:
     # Public API
     # ------------------------------------------------------------------
 
-    def detect_bubbles(self, image_np: np.ndarray) -> List[TextBlock]:
+    def detect_bubbles(self, image_np: np.ndarray) -> list[TextBlock]:
         """
         Run YOLO detection on *image_np* (RGB, uint8).
 
@@ -146,8 +144,8 @@ class SegmentationEngine:
         return blocks
 
     def refine_masks(
-        self, image_np: np.ndarray, blocks: List[TextBlock]
-    ) -> List[TextBlock]:
+        self, image_np: np.ndarray, blocks: list[TextBlock]
+    ) -> list[TextBlock]:
         """
         Use SAM 2 bounding-box prompts to generate tight bubble masks.
 
@@ -173,7 +171,7 @@ class SegmentationEngine:
                     )
                     mask = self._extract_sam_mask(results, (h, w))
                     block.mask = mask
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - optional model fallback
                     logger.warning(
                         "SAM refinement failed for block %s: %s – using rect mask",
                         block.id,
@@ -183,7 +181,7 @@ class SegmentationEngine:
 
             logger.info("SAM masks generated for %d block(s)", len(blocks))
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - optional model fallback
             logger.error("SAM engine failed: %s – falling back to rect masks", e)
             h, w = image_np.shape[:2]
             for b in blocks:
@@ -253,7 +251,7 @@ class SegmentationEngine:
                 )
                 logger.info("Downloaded to: %s", local_path)
                 return local_path
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - optional model fallback
                 logger.error(
                     "HuggingFace download failed for '%s': %s – "
                     "falling back to yolo11n-seg.pt",
@@ -272,7 +270,7 @@ class SegmentationEngine:
             self._empty_cuda_cache()
             logger.debug("YOLO unloaded from VRAM")
 
-    def _run_yolo(self, image_np: np.ndarray) -> List[TextBlock]:
+    def _run_yolo(self, image_np: np.ndarray) -> list[TextBlock]:
         """Run YOLO and convert results to :class:`TextBlock` list.
 
         For segmentation models (yolo11n-seg / best.pt from HF) the instance
@@ -290,14 +288,14 @@ class SegmentationEngine:
                 verbose=False,
                 half=(self.device == "cuda"),
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - optional model fallback
             logger.error("YOLO inference failed: %s", exc)
             return []
         finally:
             self._empty_cuda_cache()
 
         h, w = image_np.shape[:2]
-        blocks: List[TextBlock] = []
+        blocks: list[TextBlock] = []
 
         for result in results:
             if result.boxes is None:
@@ -321,19 +319,20 @@ class SegmentationEngine:
                     continue
 
                 # --- Extract instance mask from YOLO segmentation output ---
-                mask: Optional[np.ndarray] = None
+                mask: np.ndarray | None = None
                 if has_masks and i < len(result.masks.data):
                     try:
                         mask_tensor = result.masks.data[i]  # (H', W') float32
-                        mask_np = mask_tensor.cpu().numpy()  # values ~0-1
-                        if mask_np.shape != (h, w):
-                            mask_np = cv2.resize(
-                                mask_np,
-                                (w, h),
-                                interpolation=cv2.INTER_NEAREST,
-                            )
+                        if tuple(mask_tensor.shape) != (h, w):
+                            from ultralytics.utils.ops import scale_masks
+
+                            # Undo letterbox padding before restoring page coordinates.
+                            mask_tensor = scale_masks(
+                                mask_tensor[None, None].float(), (h, w)
+                            )[0, 0]
+                        mask_np = mask_tensor.cpu().numpy()
                         mask = (mask_np > 0.5).astype(np.uint8)  # binary 0/1
-                    except Exception as mask_err:
+                    except Exception as mask_err:  # noqa: BLE001 - malformed model output
                         logger.warning(
                             "Could not extract YOLO mask for detection %d: %s"
                             " – will use rect mask",
@@ -393,7 +392,7 @@ class SegmentationEngine:
             logger.debug("SAM 2 unloaded from VRAM")
 
     @staticmethod
-    def _extract_sam_mask(results, target_shape: Tuple[int, int]) -> np.ndarray:
+    def _extract_sam_mask(results, target_shape: tuple[int, int]) -> np.ndarray:
         """
         Pull the first predicted mask out of a SAM result and resize it to
         *target_shape* (H, W).  Returns a binary uint8 array (values 0/1).
@@ -414,7 +413,7 @@ class SegmentationEngine:
                         mask_np, (w, h), interpolation=cv2.INTER_NEAREST
                     )
                 return (mask_np > 0).astype(np.uint8)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - optional model fallback
             logger.warning("Could not extract SAM mask: %s", e)
 
         return fallback
@@ -425,7 +424,7 @@ class SegmentationEngine:
 
     @staticmethod
     def _rect_mask(
-        shape: Tuple[int, int], box: Tuple[int, int, int, int]
+        shape: tuple[int, int], box: tuple[int, int, int, int]
     ) -> np.ndarray:
         """Create a simple rectangular binary mask from a bounding box."""
         h, w = shape
@@ -467,5 +466,5 @@ class SegmentationEngine:
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
         except Exception:
-            pass
+            logger.debug("CUDA cache cleanup unavailable", exc_info=True)
         gc.collect()

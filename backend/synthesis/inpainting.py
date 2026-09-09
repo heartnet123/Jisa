@@ -57,37 +57,87 @@ class InpaintingEngine:
         """
         Remove all text masks from the page.
 
-        With `safe_zones` (one per mask, usually eroded bubble interiors):
-        - each mask is dilated stroke-adaptively and CLIPPED to its zone, so
-          the bubble outline and the artwork outside it are never modified
-        - combined mask is processed in a single inpainting pass
-
-        Args:
-            image_np:    RGB uint8 image [H, W, 3].
-            masks:       List of binary masks (1 = text area, 0 = keep).
-                         Each mask must have the same H×W as `image_np`.
-            dilation_px: Legacy global dilation; used only when `safe_zones`
-                         is None.
-            safe_zones:  Optional list of binary keep-regions aligned with
-                         `masks`.
-
-        Returns:
-            RGB uint8 image with text removed.
+        - For uniform speech bubbles (solid white/black/gray background):
+          Fills median background color directly onto text mask.
+          Avoids neural inpainting blur and preserves 100% border/canvas sharpness.
+        - For non-uniform / textured backgrounds (screentones, drawings):
+          Applies crop-based inpainting via LaMa (or OpenCV Telea fallback).
         """
         if not masks:
             return image_np.copy()
 
-        combined = self._combine_masks(
-            image_np.shape[:2],
-            masks,
-            dilation_px=dilation_px,
-            safe_zones=safe_zones,
+        zones = (
+            safe_zones
+            if (safe_zones is not None and len(safe_zones) == len(masks))
+            else [None] * len(masks)
         )
+        result_img = image_np.copy()
+        needs_inpaint_crops: list[np.ndarray] = []
 
-        if not combined.any():
-            return image_np.copy()
+        for m, z in zip(masks, zones):
+            if m is None or not m.any():
+                continue
 
-        return self._inpaint(image_np, combined)
+            expanded = self._expand_mask(
+                m, z, dilation_px=dilation_px if z is None else None
+            )
+            if not expanded.any():
+                continue
+
+            # Check background uniformity (BallonsTranslator check_need_inpaint pattern)
+            if z is not None and z.any():
+                bg_mask = (z > 0) & (expanded == 0)
+            else:
+                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+                dilated = cv2.dilate(expanded, kernel, iterations=1)
+                bg_mask = (dilated > 0) & (expanded == 0)
+
+            bg_pixels = image_np[bg_mask]
+            is_uniform = False
+            median_color = None
+
+            # Reject faint gradients and texture in any color channel.
+            if (
+                bg_pixels.shape[0] >= 10
+                and np.all(np.std(bg_pixels, axis=0) <= 2.0)
+                and np.all(np.ptp(bg_pixels, axis=0) <= 8)
+            ):
+                is_uniform = True
+                median_color = np.median(bg_pixels, axis=0).astype(np.uint8)
+
+            if is_uniform and median_color is not None:
+                result_img[expanded > 0] = median_color
+            else:
+                needs_inpaint_crops.append(expanded)
+
+        if not needs_inpaint_crops:
+            return result_img
+
+        try:
+            h, w = result_img.shape[:2]
+            for crop_mask in needs_inpaint_crops:
+                ys, xs = np.where(crop_mask > 0)
+                if len(ys) == 0:
+                    continue
+                x1, x2 = int(xs.min()), int(xs.max()) + 1
+                y1, y2 = int(ys.min()), int(ys.max()) + 1
+
+                # Pad crop window by 24px for surrounding texture context
+                pad = 24
+                cx1 = max(0, x1 - pad)
+                cy1 = max(0, y1 - pad)
+                cx2 = min(w, x2 + pad)
+                cy2 = min(h, y2 + pad)
+
+                crop_img = result_img[cy1:cy2, cx1:cx2]
+                crop_m = crop_mask[cy1:cy2, cx1:cx2]
+
+                inpainted_crop = self._inpaint(crop_img, crop_m)
+                result_img[cy1:cy2, cx1:cx2] = inpainted_crop
+        finally:
+            self.release()
+
+        return result_img
 
     @staticmethod
     def _expand_mask(
@@ -124,24 +174,45 @@ class InpaintingEngine:
         self,
         image_np: np.ndarray,
         bubble_masks: list[np.ndarray],
-    ) -> list[np.ndarray]:
+        text_classes: list[str] | None = None,
+    ) -> list[tuple[np.ndarray, np.ndarray]]:
         """
         Convert bubble-level masks into text-only masks.
 
-        The segmentation model finds the whole speech bubble, but for
-        inpainting we only want to erase the dark glyphs inside the bubble —
-        never the white interior, the outline, or anything outside it.
-
-        Returns a list of (text_mask, safe_zone) pairs. The safe zone is the
-        bubble eroded clear of its border; every downstream mask operation
-        stays strictly inside that zone.
+        Returns a list of (text_mask, safe_zone) pairs.
+        - For speech bubbles: safe zone is bubble interior eroded clear of outline.
+        - For free text (outside bubbles / SFX): safe zone is the text region itself.
         """
         pairs: list[tuple[np.ndarray, np.ndarray]] = []
+        classes = (
+            text_classes
+            if (text_classes is not None and len(text_classes) == len(bubble_masks))
+            else ["text_bubble"] * len(bubble_masks)
+        )
 
-        for bubble_mask in bubble_masks:
-            text_mask = self._extract_text_mask(image_np, bubble_mask)
-            if text_mask.any():
-                pairs.append((text_mask, self._safe_zone(bubble_mask)))
+        gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY) if bubble_masks else None
+        for bubble_mask, t_cls in zip(bubble_masks, classes):
+            is_manual = t_cls == "manual"
+            text_mask = self._extract_text_mask(
+                image_np, bubble_mask, manual=is_manual, gray=gray
+            )
+            if not text_mask.any():
+                continue
+
+            safe_zone = (
+                (bubble_mask > 0).astype(np.uint8)
+                if is_manual
+                else self._safe_zone(bubble_mask)
+            )
+            background = np.median(gray[bubble_mask > 0])
+            protected = (
+                (np.abs(gray.astype(np.float32) - background) > 32)
+                & (text_mask == 0)
+                & (bubble_mask > 0)
+            ).astype(np.uint8)
+            protected = cv2.dilate(protected, np.ones((3, 3), np.uint8))
+            safe_zone[(protected > 0) & (text_mask == 0)] = 0
+            pairs.append((text_mask, safe_zone))
 
         return pairs
 
@@ -153,7 +224,8 @@ class InpaintingEngine:
             return m
 
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        zone = cv2.erode(m, kernel, iterations=3)  # ≈6 px margin off the border
+        iterations = 1 if int(m.sum()) < 2500 else 3
+        zone = cv2.erode(m, kernel, iterations=iterations)
         return zone if zone.any() else m
 
     def release(self) -> None:
@@ -229,6 +301,9 @@ class InpaintingEngine:
     def _extract_text_mask(
         image_np: np.ndarray,
         bubble_mask: np.ndarray,
+        *,
+        manual: bool = False,
+        gray: np.ndarray | None = None,
     ) -> np.ndarray:
         """
         Build a text-only mask inside a detected bubble.
@@ -244,14 +319,48 @@ class InpaintingEngine:
         if bubble_mask.shape != (h, w) or bubble_mask.sum() == 0:
             return np.zeros((h, w), dtype=np.uint8)
 
-        gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
+        if gray is None:
+            gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
 
-        inner_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        # iterations=3 ≈6 px margin: text never reaches the outline, so the
-        # border stays untouched even after downstream mask dilation
-        inner_mask = cv2.erode(bubble_mask, inner_kernel, iterations=3)
-        if inner_mask.sum() == 0:
-            inner_mask = bubble_mask.copy()
+        if manual:
+            # ponytail: local median with wider context avoids narrow dark borders on tight crops
+            context = cv2.dilate(bubble_mask, np.ones((21, 21), np.uint8))
+            pixels = gray[(context > 0) & (bubble_mask == 0)]
+            if pixels.size == 0:
+                pixels = gray[bubble_mask > 0]
+            if pixels.size == 0:
+                return np.zeros((h, w), dtype=np.uint8)
+
+            box_pixels = gray[bubble_mask > 0]
+            light_outer = pixels[pixels >= 120]
+            light_box = box_pixels[box_pixels >= 120]
+            dark_box = box_pixels[box_pixels < 120]
+
+            if light_outer.size >= 10:
+                background = float(np.median(light_outer))
+                contrast = background - gray.astype(np.float32)
+            elif light_box.size > 0 and dark_box.size > 0:
+                if light_box.size >= dark_box.size:
+                    background = float(np.median(light_box))
+                    contrast = background - gray.astype(np.float32)
+                else:
+                    background = float(np.median(dark_box))
+                    contrast = gray.astype(np.float32) - background
+            else:
+                background = float(np.median(pixels))
+                contrast = (
+                    gray.astype(np.float32) - background
+                    if background < 120
+                    else background - gray.astype(np.float32)
+                )
+
+            foreground = ((contrast > 32) & (bubble_mask > 0)).astype(np.uint8)
+            count, labels, stats, _ = cv2.connectedComponentsWithStats(foreground, 8)
+            keep = np.zeros(count, dtype=np.uint8)
+            keep[1:] = stats[1:, cv2.CC_STAT_AREA] >= 3
+            return keep[labels]
+
+        inner_mask = InpaintingEngine._safe_zone(bubble_mask)
 
         x, y, w_roi, h_roi = cv2.boundingRect(inner_mask)
         if w_roi <= 0 or h_roi <= 0:
@@ -263,27 +372,43 @@ class InpaintingEngine:
         if bubble_pixels.size == 0:
             return np.zeros((h, w), dtype=np.uint8)
 
-        percentile_threshold = min(190, int(np.percentile(bubble_pixels, 55)))
-        otsu_threshold, _ = cv2.threshold(
-            bubble_pixels.astype(np.uint8),
-            0,
-            255,
-            cv2.THRESH_BINARY + cv2.THRESH_OTSU,
-        )
-        dark_threshold = min(percentile_threshold, int(otsu_threshold))
-
-        dark_roi = ((gray_roi <= dark_threshold).astype(np.uint8)) * mask_roi
+        bg_is_light = float(np.median(bubble_pixels)) >= 120.0
+        if bg_is_light:
+            percentile_threshold = min(200, int(np.percentile(bubble_pixels, 60)))
+            otsu_threshold, _ = cv2.threshold(
+                bubble_pixels.astype(np.uint8),
+                0,
+                255,
+                cv2.THRESH_BINARY + cv2.THRESH_OTSU,
+            )
+            dark_threshold = min(percentile_threshold, int(otsu_threshold))
+            foreground_roi = ((gray_roi <= dark_threshold).astype(np.uint8)) * mask_roi
+        else:
+            percentile_threshold = max(55, int(np.percentile(bubble_pixels, 40)))
+            otsu_threshold, _ = cv2.threshold(
+                bubble_pixels.astype(np.uint8),
+                0,
+                255,
+                cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU,
+            )
+            light_threshold = max(percentile_threshold, int(otsu_threshold))
+            foreground_roi = ((gray_roi >= light_threshold).astype(np.uint8)) * mask_roi
 
         cleanup_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        dark_roi = cv2.morphologyEx(
-            dark_roi, cv2.MORPH_CLOSE, cleanup_kernel, iterations=1
+        foreground_roi = cv2.morphologyEx(
+            foreground_roi, cv2.MORPH_CLOSE, cleanup_kernel, iterations=1
         )
 
-        dark = np.zeros((h, w), dtype=np.uint8)
-        dark[y : y + h_roi, x : x + w_roi] = dark_roi
+        foreground = np.zeros((h, w), dtype=np.uint8)
+        foreground[y : y + h_roi, x : x + w_roi] = foreground_roi
+
+        boundary = (inner_mask > 0) & (
+            cv2.erode(inner_mask, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)))
+            == 0
+        )
 
         num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
-            dark, connectivity=8
+            foreground, connectivity=8
         )
 
         bubble_area = int(inner_mask.sum())
@@ -294,11 +419,14 @@ class InpaintingEngine:
 
             if area < 3:
                 continue
-            if area > max(64, bubble_area // 3):
+            if area > int(bubble_area * 0.85):
                 continue
 
-            component = (labels == label_idx).astype(np.uint8)
-            text_mask = cv2.bitwise_or(text_mask, component)
+            component = labels == label_idx
+            if np.any(component & boundary):
+                continue
+
+            text_mask = cv2.bitwise_or(text_mask, component.astype(np.uint8))
 
         if text_mask.sum() == 0:
             return text_mask
@@ -354,11 +482,6 @@ class InpaintingEngine:
             )
             return self._inpaint_opencv(image_np, mask)
 
-        finally:
-            # Free VRAM immediately after inference so the next stage
-            # (SAM / Ollama) has room to load.
-            self.release()
-
     @staticmethod
     def _inpaint_opencv(image_np: np.ndarray, mask: np.ndarray) -> np.ndarray:
         """
@@ -378,9 +501,8 @@ class InpaintingEngine:
         image_np: np.ndarray,
         inpainted_np: np.ndarray,
         mask: np.ndarray,
-        feather_px: int = 3,
     ) -> np.ndarray:
-        """Keep model changes inside the erase mask and softly blend the edge."""
+        """Keep every unmasked pixel exact, including pixels next to the mask."""
         if int(mask.sum()) == 0:
             return image_np.copy()
 
@@ -404,21 +526,11 @@ class InpaintingEngine:
         elif inpainted_np.shape[2] == 4:
             inpainted_np = cv2.cvtColor(inpainted_np, cv2.COLOR_RGBA2RGB)
 
-        alpha = (mask > 0).astype(np.float32)
-        if feather_px > 0:
-            kernel_size = feather_px * 2 + 1
-            feathered = cv2.GaussianBlur(
-                alpha,
-                (kernel_size, kernel_size),
-                sigmaX=0,
-            )
-            alpha = np.maximum(alpha, feathered)
-
-        alpha = np.clip(alpha[..., None], 0.0, 1.0)
-        blended = inpainted_np.astype(np.float32) * alpha + image_np.astype(
-            np.float32
-        ) * (1.0 - alpha)
-        return np.clip(blended, 0, 255).astype(np.uint8)
+        return np.where(
+            (mask > 0)[..., None],
+            np.clip(inpainted_np, 0, 255).astype(np.uint8),
+            image_np,
+        )
 
     @staticmethod
     def _flush_vram() -> None:
