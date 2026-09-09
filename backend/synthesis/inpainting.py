@@ -190,10 +190,12 @@ class InpaintingEngine:
             else ["text_bubble"] * len(bubble_masks)
         )
 
-        gray: np.ndarray | None = None
+        gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY) if bubble_masks else None
         for bubble_mask, t_cls in zip(bubble_masks, classes):
             is_manual = t_cls == "manual"
-            text_mask = self._extract_text_mask(image_np, bubble_mask, manual=is_manual)
+            text_mask = self._extract_text_mask(
+                image_np, bubble_mask, manual=is_manual, gray=gray
+            )
             if not text_mask.any():
                 continue
 
@@ -202,9 +204,6 @@ class InpaintingEngine:
                 if is_manual
                 else self._safe_zone(bubble_mask)
             )
-            if gray is None:
-                gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
-
             background = np.median(gray[bubble_mask > 0])
             protected = (
                 (np.abs(gray.astype(np.float32) - background) > 32)
@@ -304,6 +303,7 @@ class InpaintingEngine:
         bubble_mask: np.ndarray,
         *,
         manual: bool = False,
+        gray: np.ndarray | None = None,
     ) -> np.ndarray:
         """
         Build a text-only mask inside a detected bubble.
@@ -319,7 +319,8 @@ class InpaintingEngine:
         if bubble_mask.shape != (h, w) or bubble_mask.sum() == 0:
             return np.zeros((h, w), dtype=np.uint8)
 
-        gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
+        if gray is None:
+            gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
 
         if manual:
             # ponytail: local median with wider context avoids narrow dark borders on tight crops
