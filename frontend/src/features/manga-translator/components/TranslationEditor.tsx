@@ -124,7 +124,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
   const [saveStatusMap, setSaveStatusMap] = useState<Record<string, 'saving' | 'saved' | 'error'>>({});
   const autoSaveTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const savedTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  const inFlightSavesRef = useRef<Set<string>>(new Set());
+  const inFlightPromisesRef = useRef<Record<string, Promise<void>>>({});
   const needsResaveRef = useRef<Set<string>>(new Set());
 
   const dirtySourceIdsRef = useRef(dirtySourceIds);
@@ -442,64 +442,64 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     dirtyTranslationIdsRef.current.has(blockId) ||
     dirtyTypesettingIdsRef.current.has(blockId);
 
-  const saveBlock = async (blockId: string, manual = false) => {
+  const clearSavedTimer = (blockId: string) => {
+    if (savedTimersRef.current[blockId]) {
+      clearTimeout(savedTimersRef.current[blockId]);
+      delete savedTimersRef.current[blockId];
+    }
+    setSaveStatusMap(prev => {
+      if (prev[blockId] !== 'saved') return prev;
+      const next = { ...prev };
+      delete next[blockId];
+      return next;
+    });
+  };
+
+  const saveBlock = async (blockId: string, manual = false): Promise<void> => {
     if (autoSaveTimersRef.current[blockId]) {
       clearTimeout(autoSaveTimersRef.current[blockId]);
       delete autoSaveTimersRef.current[blockId];
     }
     if (!isBlockDirtyRef(blockId)) return;
 
-    if (inFlightSavesRef.current.has(blockId)) {
+    if (inFlightPromisesRef.current[blockId]) {
+      if (manual) setActiveRegionAction({ blockId, action: 'save' });
       needsResaveRef.current.add(blockId);
+      await inFlightPromisesRef.current[blockId];
       return;
     }
 
-    inFlightSavesRef.current.add(blockId);
     if (manual) setActiveRegionAction({ blockId, action: 'save' });
     setSaveStatusMap(prev => ({ ...prev, [blockId]: 'saving' }));
     setRegionError(null);
 
-    try {
-      await persistDirtyBlocks([blockId]);
-      setSaveStatusMap(prev => ({ ...prev, [blockId]: 'saved' }));
-      if (savedTimersRef.current[blockId]) clearTimeout(savedTimersRef.current[blockId]);
-      savedTimersRef.current[blockId] = setTimeout(() => {
-        delete savedTimersRef.current[blockId];
-        setSaveStatusMap(prev => {
-          if (!prev[blockId]) return prev;
-          const next = { ...prev };
-          delete next[blockId];
-          return next;
-        });
-      }, 2000);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to save region text';
-      console.error('Save failed:', err);
-      setRegionError(msg);
-      setSaveStatusMap(prev => ({ ...prev, [blockId]: 'error' }));
-    } finally {
-      inFlightSavesRef.current.delete(blockId);
-      if (manual) setActiveRegionAction(null);
+    const promise = (async () => {
+      try {
+        await persistDirtyBlocks([blockId]);
+        setSaveStatusMap(prev => ({ ...prev, [blockId]: 'saved' }));
+        if (savedTimersRef.current[blockId]) clearTimeout(savedTimersRef.current[blockId]);
+        savedTimersRef.current[blockId] = setTimeout(() => clearSavedTimer(blockId), 2000);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Failed to save region text';
+        console.error('Save failed:', err);
+        setRegionError(msg);
+        setSaveStatusMap(prev => ({ ...prev, [blockId]: 'error' }));
+      } finally {
+        delete inFlightPromisesRef.current[blockId];
+        if (manual) setActiveRegionAction(null);
 
-      if (needsResaveRef.current.delete(blockId)) {
-        void saveBlock(blockId, false);
+        if (needsResaveRef.current.delete(blockId)) {
+          void saveBlock(blockId, false);
+        }
       }
-    }
+    })();
+
+    inFlightPromisesRef.current[blockId] = promise;
+    await promise;
   };
 
-  const handleSaveBlock = (blockId: string) => saveBlock(blockId, true);
-
   const scheduleAutoSave = (blockId: string) => {
-    if (savedTimersRef.current[blockId]) {
-      clearTimeout(savedTimersRef.current[blockId]);
-      delete savedTimersRef.current[blockId];
-    }
-    setSaveStatusMap(prev => {
-      if (!prev[blockId]) return prev;
-      const next = { ...prev };
-      delete next[blockId];
-      return next;
-    });
+    clearSavedTimer(blockId);
 
     if (autoSaveTimersRef.current[blockId]) {
       clearTimeout(autoSaveTimersRef.current[blockId]);
@@ -542,6 +542,9 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
   };
 
   const persistDirtyBlocks = async (onlyIds?: string[]) => {
+    if (!onlyIds) {
+      await Promise.all(Object.values(inFlightPromisesRef.current));
+    }
     const requestedIds = onlyIds
       ? new Set(onlyIds)
       : new Set([
@@ -886,7 +889,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
                   disabled={controlsDisabled}
                   onDelete={handleDeleteBlock}
                   onRerunOcr={handleRerunOcr}
-                  onSave={handleSaveBlock}
+                  onSave={blockId => void saveBlock(blockId, true)}
                   onSelect={handleSelect}
                   onSourceChange={handleSourceChange}
                   onTranslationChange={handleTranslationChange}
