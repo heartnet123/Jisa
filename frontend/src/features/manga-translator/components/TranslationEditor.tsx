@@ -64,6 +64,8 @@ function withoutId(values: Set<string>, ids: string | string[]): Set<string> {
   return next;
 }
 
+const AUTOSAVE_DEBOUNCE_MS = 700;
+
 export const TranslationEditor: React.FC<TranslationEditorProps> = ({
   item,
   onClose,
@@ -119,6 +121,27 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
   const clientRevisionsRef = useRef<Record<string, number>>({});
 
   const [isSavingRegions, setIsSavingRegions] = useState(false);
+  const [saveStatusMap, setSaveStatusMap] = useState<Record<string, 'saving' | 'saved' | 'error'>>({});
+  const autoSaveTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const savedTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const inFlightPromisesRef = useRef<Record<string, Promise<void>>>({});
+  const needsResaveRef = useRef<Set<string>>(new Set());
+
+  const dirtySourceIdsRef = useRef(dirtySourceIds);
+  dirtySourceIdsRef.current = dirtySourceIds;
+  const dirtyTranslationIdsRef = useRef(dirtyTranslationIds);
+  dirtyTranslationIdsRef.current = dirtyTranslationIds;
+  const dirtyTypesettingIdsRef = useRef(dirtyTypesettingIds);
+  dirtyTypesettingIdsRef.current = dirtyTypesettingIds;
+  const editedSourcesRef = useRef(editedSources);
+  editedSourcesRef.current = editedSources;
+  const editedTranslationsRef = useRef(editedTranslations);
+  editedTranslationsRef.current = editedTranslations;
+  const editedTypesettingRef = useRef(editedTypesetting);
+  editedTypesettingRef.current = editedTypesetting;
+  const blocksRef = useRef(blocks);
+  blocksRef.current = blocks;
+
   const [activeRegionAction, setActiveRegionAction] = useState<{
     blockId: string;
     action: RegionAction;
@@ -149,7 +172,16 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
       });
   }, []);
 
+  const clearAllTimers = () => {
+    Object.values(autoSaveTimersRef.current).forEach(clearTimeout);
+    autoSaveTimersRef.current = {};
+    Object.values(savedTimersRef.current).forEach(clearTimeout);
+    savedTimersRef.current = {};
+  };
+
   useEffect(() => {
+    clearAllTimers();
+    setSaveStatusMap({});
     setBlocks(item.blocks || []);
     savedBlocksRef.current = item.blocks || [];
     geometryRevisionRef.current += 1;
@@ -169,11 +201,18 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     setShowMaskPreview(Boolean(item.mask_preview_url));
     setSubmitError(null);
     setRegionError(null);
-    return () => { maskRequestRef.current += 1; };
+    return () => {
+      maskRequestRef.current += 1;
+      clearAllTimers();
+    };
   }, [item.id]);
 
   const currentPageIndex = pages && pages.length > 0 ? pages.findIndex(p => p.id === item.id) : -1;
   const isSwitchingPageRef = useRef(false);
+  const hasDirtyDrafts = () =>
+    dirtySourceIdsRef.current.size > 0 ||
+    dirtyTranslationIdsRef.current.size > 0 ||
+    dirtyTypesettingIdsRef.current.size > 0;
 
   const handlePageChange = async (targetIndex: number) => {
     if (!pages || targetIndex < 0 || targetIndex >= pages.length || isSwitchingPageRef.current) return;
@@ -182,7 +221,8 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
 
     isSwitchingPageRef.current = true;
     try {
-      if (dirtySourceIds.size > 0 || dirtyTranslationIds.size > 0 || dirtyTypesettingIds.size > 0) {
+      clearAllTimers();
+      if (hasDirtyDrafts()) {
         await persistDirtyBlocks();
       }
       if (onNavigatePage) {
@@ -392,7 +432,98 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     return handleRegionCommit(nextBlocks);
   };
 
+  const isBlockDirty = (blockId: string) =>
+    dirtySourceIds.has(blockId) ||
+    dirtyTranslationIds.has(blockId) ||
+    dirtyTypesettingIds.has(blockId);
+
+  const isBlockDirtyRef = (blockId: string) =>
+    dirtySourceIdsRef.current.has(blockId) ||
+    dirtyTranslationIdsRef.current.has(blockId) ||
+    dirtyTypesettingIdsRef.current.has(blockId);
+
+  const clearSavedTimer = (blockId: string) => {
+    if (savedTimersRef.current[blockId]) {
+      clearTimeout(savedTimersRef.current[blockId]);
+      delete savedTimersRef.current[blockId];
+    }
+    setSaveStatusMap(prev => {
+      if (prev[blockId] !== 'saved') return prev;
+      const next = { ...prev };
+      delete next[blockId];
+      return next;
+    });
+  };
+
+  const saveBlock = async (blockId: string, manual = false): Promise<void> => {
+    if (autoSaveTimersRef.current[blockId]) {
+      clearTimeout(autoSaveTimersRef.current[blockId]);
+      delete autoSaveTimersRef.current[blockId];
+    }
+    if (!isBlockDirtyRef(blockId)) return;
+
+    if (inFlightPromisesRef.current[blockId]) {
+      if (manual) setActiveRegionAction({ blockId, action: 'save' });
+      needsResaveRef.current.add(blockId);
+      try {
+        await inFlightPromisesRef.current[blockId];
+      } finally {
+        if (manual) setActiveRegionAction(null);
+      }
+      return;
+    }
+
+    if (manual) setActiveRegionAction({ blockId, action: 'save' });
+    setSaveStatusMap(prev => ({ ...prev, [blockId]: 'saving' }));
+    setRegionError(null);
+
+    const promise = (async () => {
+      try {
+        await persistDirtyBlocks([blockId]);
+        setSaveStatusMap(prev => ({ ...prev, [blockId]: 'saved' }));
+        if (savedTimersRef.current[blockId]) clearTimeout(savedTimersRef.current[blockId]);
+        savedTimersRef.current[blockId] = setTimeout(() => clearSavedTimer(blockId), 2000);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Failed to save region text';
+        console.error('Save failed:', err);
+        setRegionError(msg);
+        setSaveStatusMap(prev => ({ ...prev, [blockId]: 'error' }));
+      } finally {
+        delete inFlightPromisesRef.current[blockId];
+        if (manual) setActiveRegionAction(null);
+
+        if (needsResaveRef.current.delete(blockId)) {
+          void saveBlock(blockId, false);
+        }
+      }
+    })();
+
+    inFlightPromisesRef.current[blockId] = promise;
+    await promise;
+  };
+
+  const scheduleAutoSave = (blockId: string) => {
+    clearSavedTimer(blockId);
+    setSaveStatusMap(prev => {
+      if (prev[blockId] !== 'error') return prev;
+      const next = { ...prev };
+      delete next[blockId];
+      return next;
+    });
+
+    if (autoSaveTimersRef.current[blockId]) {
+      clearTimeout(autoSaveTimersRef.current[blockId]);
+    }
+    autoSaveTimersRef.current[blockId] = setTimeout(() => {
+      delete autoSaveTimersRef.current[blockId];
+      void saveBlock(blockId);
+    }, AUTOSAVE_DEBOUNCE_MS);
+  };
+
   const handleSelect = (blockId: string | null) => {
+    if (selectedBlockId && selectedBlockId !== blockId) {
+      void saveBlock(selectedBlockId);
+    }
     setSelectedBlockId(blockId);
     if (blockId) {
       document.getElementById(`segment-${blockId}`)?.scrollIntoView({
@@ -405,84 +536,143 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
   const handleSourceChange = (blockId: string, value: string) => {
     setEditedSources(previous => ({ ...previous, [blockId]: value }));
     setDirtySourceIds(previous => new Set(previous).add(blockId));
+    scheduleAutoSave(blockId);
   };
 
   const handleTranslationChange = (blockId: string, value: string) => {
     setEditedTranslations(previous => ({ ...previous, [blockId]: value }));
     setDirtyTranslationIds(previous => new Set(previous).add(blockId));
+    scheduleAutoSave(blockId);
   };
 
   const handleTypesettingChange = (blockId: string, settings: TypesettingSettings) => {
     setEditedTypesetting(previous => ({ ...previous, [blockId]: settings }));
     setDirtyTypesettingIds(previous => new Set(previous).add(blockId));
+    scheduleAutoSave(blockId);
   };
 
   const persistDirtyBlocks = async (onlyIds?: string[]) => {
+    if (!onlyIds) {
+      await Promise.all(Object.values(inFlightPromisesRef.current));
+    }
     const requestedIds = onlyIds
       ? new Set(onlyIds)
-      : new Set([...dirtySourceIds, ...dirtyTranslationIds, ...dirtyTypesettingIds]);
-    const ids = blocks
+      : new Set([
+          ...dirtySourceIdsRef.current,
+          ...dirtyTranslationIdsRef.current,
+          ...dirtyTypesettingIdsRef.current,
+        ]);
+    const ids = blocksRef.current
       .map(block => block.id)
       .filter(id => requestedIds.has(id));
 
     if (ids.length === 0) {
-      return { blocks, translations: editedTranslations };
+      return { blocks: blocksRef.current, translations: editedTranslationsRef.current };
     }
 
+    const patches = ids.map(blockId => {
+      const patch: {
+        text?: string;
+        translated_text?: string;
+        typesetting?: TypesettingSettings;
+      } = {};
+      const sourceDirty = dirtySourceIdsRef.current.has(blockId);
+      const translationDirty = dirtyTranslationIdsRef.current.has(blockId);
+      const typesettingDirty = dirtyTypesettingIdsRef.current.has(blockId);
+
+      if (sourceDirty) patch.text = editedSourcesRef.current[blockId] ?? '';
+      if (translationDirty) patch.translated_text = editedTranslationsRef.current[blockId] ?? '';
+      if (typesettingDirty) patch.typesetting = editedTypesettingRef.current[blockId];
+
+      return { blockId, patch, sourceDirty, translationDirty, typesettingDirty };
+    });
+
     const updates = await Promise.all(
-      ids.map(async blockId => {
-        const patch: {
-          text?: string;
-          translated_text?: string;
-          typesetting?: TypesettingSettings;
-        } = {};
-        if (dirtySourceIds.has(blockId)) patch.text = editedSources[blockId] ?? '';
-        if (dirtyTranslationIds.has(blockId)) {
-          patch.translated_text = editedTranslations[blockId] ?? '';
-        }
-        if (dirtyTypesettingIds.has(blockId)) {
-          patch.typesetting = editedTypesetting[blockId];
-        }
-        return mangaApi.patchRegion(item.id, blockId, patch);
-      }),
+      patches.map(async ({ blockId, patch }) => mangaApi.patchRegion(item.id, blockId, patch)),
     );
     const updatedById = new Map(updates.map(block => [block.id, block]));
-    const nextBlocks = blocks.map(block => updatedById.get(block.id) ?? block);
-    const nextSources = { ...editedSources };
-    const nextTranslations = { ...editedTranslations };
-    const nextTypesetting = { ...editedTypesetting };
-    for (const updated of updates) {
-      nextSources[updated.id] = updated.text ?? '';
-      nextTranslations[updated.id] = updated.translated_text ?? '';
-      if (updated.typesetting) {
-        nextTypesetting[updated.id] = defaultTypesetting(updated.typesetting);
-      }
-    }
+    const nextBlocks = blocksRef.current.map(block => updatedById.get(block.id) ?? block);
 
     savedBlocksRef.current = nextBlocks;
     setBlocks(nextBlocks);
-    setEditedSources(nextSources);
-    setEditedTranslations(nextTranslations);
-    setEditedTypesetting(nextTypesetting);
-    setDirtySourceIds(previous => withoutId(previous, ids));
-    setDirtyTranslationIds(previous => withoutId(previous, ids));
-    setDirtyTypesettingIds(previous => withoutId(previous, ids));
+
+    setEditedSources(prev => {
+      const next = { ...prev };
+      for (const p of patches) {
+        if (p.sourceDirty && prev[p.blockId] === p.patch.text) {
+          const updated = updatedById.get(p.blockId);
+          if (updated) next[p.blockId] = updated.text ?? '';
+        }
+      }
+      return next;
+    });
+
+    setEditedTranslations(prev => {
+      const next = { ...prev };
+      for (const p of patches) {
+        if (p.translationDirty && prev[p.blockId] === p.patch.translated_text) {
+          const updated = updatedById.get(p.blockId);
+          if (updated) next[p.blockId] = updated.translated_text ?? '';
+        }
+      }
+      return next;
+    });
+
+    setEditedTypesetting(prev => {
+      const next = { ...prev };
+      for (const p of patches) {
+        if (
+          p.typesettingDirty &&
+          JSON.stringify(prev[p.blockId]) === JSON.stringify(p.patch.typesetting)
+        ) {
+          const updated = updatedById.get(p.blockId);
+          if (updated?.typesetting) next[p.blockId] = defaultTypesetting(updated.typesetting);
+        }
+      }
+      return next;
+    });
+
+    setDirtySourceIds(prev => {
+      const next = new Set(prev);
+      for (const p of patches) {
+        if (p.sourceDirty && editedSourcesRef.current[p.blockId] === p.patch.text) {
+          next.delete(p.blockId);
+        }
+      }
+      return next;
+    });
+
+    setDirtyTranslationIds(prev => {
+      const next = new Set(prev);
+      for (const p of patches) {
+        if (
+          p.translationDirty &&
+          editedTranslationsRef.current[p.blockId] === p.patch.translated_text
+        ) {
+          next.delete(p.blockId);
+        }
+      }
+      return next;
+    });
+
+    setDirtyTypesettingIds(prev => {
+      const next = new Set(prev);
+      for (const p of patches) {
+        if (
+          p.typesettingDirty &&
+          JSON.stringify(editedTypesettingRef.current[p.blockId]) ===
+            JSON.stringify(p.patch.typesetting)
+        ) {
+          next.delete(p.blockId);
+        }
+      }
+      return next;
+    });
+
     onUpdate(item.id, { blocks: nextBlocks });
-    return { blocks: nextBlocks, translations: nextTranslations };
+    return { blocks: nextBlocks, translations: editedTranslationsRef.current };
   };
 
-  const handleSaveBlock = async (blockId: string) => {
-    setActiveRegionAction({ blockId, action: 'save' });
-    setRegionError(null);
-    try {
-      await persistDirtyBlocks([blockId]);
-    } catch (err) {
-      console.error('Failed to save region text:', err);
-      setRegionError(err instanceof Error ? err.message : 'Failed to save region text');
-    } finally {
-      setActiveRegionAction(null);
-    }
-  };
 
   const handleRerunOcr = async (blockId: string) => {
     setActiveRegionAction({ blockId, action: 'ocr' });
@@ -575,6 +765,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     setIsSubmitting(true);
     setSubmitError(null);
     try {
+      clearAllTimers();
       await waitForGeometry();
       if (pageRef.current !== item.id) return;
       const persisted = await persistDirtyBlocks();
@@ -602,6 +793,18 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     }
   };
 
+  const handleExit = async () => {
+    clearAllTimers();
+    if (hasDirtyDrafts()) {
+      try {
+        await persistDirtyBlocks();
+      } catch (err) {
+        console.error('Failed to auto-save on exit:', err);
+      }
+    }
+    onClose();
+  };
+
   const hasDirtyText = dirtySourceIds.size > 0 || dirtyTranslationIds.size > 0 || dirtyTypesettingIds.size > 0;
   const controlsDisabled = isSavingRegions || isSubmitting || activeRegionAction !== null;
 
@@ -614,7 +817,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
 
         <button
           type="button"
-          onClick={onClose}
+          onClick={handleExit}
           className="rounded border border-border bg-panel px-3 py-1.5 font-mono text-xs font-bold uppercase text-main transition-colors hover:border-red-500 hover:bg-red-500/10 hover:text-red-500"
         >
           Exit
@@ -652,9 +855,13 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
             <span className="font-mono text-xs uppercase tracking-widest text-accent font-bold">
               {isSavingRegions
                 ? 'Saving layout…'
-                : hasDirtyText
-                  ? 'Unsaved text'
-                  : `${blocks.length} Regions`}
+                : Object.values(saveStatusMap).includes('saving')
+                  ? 'Saving changes…'
+                  : hasDirtyText
+                    ? 'Unsaved text'
+                    : Object.values(saveStatusMap).includes('saved')
+                      ? 'All changes saved'
+                      : `${blocks.length} Regions`}
             </span>
           </div>
 
@@ -682,7 +889,8 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
                   typesettingValue={editedTypesetting[block.id] ?? defaultTypesetting(block.typesetting)}
                   typesettingOptions={typesettingOptions}
                   previewStatus={previewCache[block.id]}
-                  dirty={dirtySourceIds.has(block.id) || dirtyTranslationIds.has(block.id) || dirtyTypesettingIds.has(block.id)}
+                  dirty={isBlockDirty(block.id)}
+                  saveStatus={saveStatusMap[block.id] ?? (isBlockDirty(block.id) ? 'unsaved' : 'idle')}
                   action={
                     activeRegionAction?.blockId === block.id
                       ? activeRegionAction.action
@@ -691,7 +899,7 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
                   disabled={controlsDisabled}
                   onDelete={handleDeleteBlock}
                   onRerunOcr={handleRerunOcr}
-                  onSave={handleSaveBlock}
+                  onSave={blockId => void saveBlock(blockId, true)}
                   onSelect={handleSelect}
                   onSourceChange={handleSourceChange}
                   onTranslationChange={handleTranslationChange}

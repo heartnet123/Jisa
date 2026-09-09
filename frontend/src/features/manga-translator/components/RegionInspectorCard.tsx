@@ -6,7 +6,6 @@ import type {
   TextAlign,
   TypesettingOptionsResponse,
   TypesettingSettings,
-  TypesetPreviewResponse,
 } from "../types";
 
 interface RegionInspectorCardProps {
@@ -27,6 +26,7 @@ interface RegionInspectorCardProps {
     error?: string | null;
   } | null;
   dirty: boolean;
+  saveStatus?: "idle" | "unsaved" | "saving" | "saved" | "error";
   action: "save" | "ocr" | "delete" | null;
   disabled: boolean;
   onDelete: (blockId: string) => void;
@@ -48,6 +48,7 @@ export function RegionInspectorCard({
   typesettingOptions,
   previewStatus,
   dirty,
+  saveStatus,
   action,
   disabled,
   onDelete,
@@ -58,6 +59,9 @@ export function RegionInspectorCard({
   onTranslationChange,
   onTypesettingChange,
 }: RegionInspectorCardProps) {
+  const isSaving = saveStatus === "saving" || action === "save";
+  const isSaved = saveStatus === "saved" && !dirty && !isSaving;
+  const isError = saveStatus === "error";
   const busy = action !== null;
 
   const fontSizeMin = typesettingOptions?.font_size.min ?? 8;
@@ -176,7 +180,22 @@ export function RegionInspectorCard({
             {block.source}
           </span>
         </div>
-        {dirty ? (
+        {isSaving ? (
+          <span className="flex items-center gap-1 font-mono text-xs uppercase text-accent font-medium">
+            <Icon icon="eos-icons:loading" className="text-xs animate-spin" />
+            Saving…
+          </span>
+        ) : isError ? (
+          <span className="flex items-center gap-1 font-mono text-xs uppercase text-red-500 font-medium">
+            <Icon icon="solar:danger-triangle-linear" className="text-xs" />
+            Save failed
+          </span>
+        ) : isSaved ? (
+          <span className="flex items-center gap-1 font-mono text-xs uppercase text-emerald-500 font-medium">
+            <Icon icon="solar:check-circle-linear" className="text-xs" />
+            Saved
+          </span>
+        ) : dirty ? (
           <span className="flex items-center gap-1 font-mono text-xs uppercase text-yellow-500 font-medium">
             <span className="h-1.5 w-1.5 rounded-full bg-yellow-500" />
             Unsaved
@@ -454,8 +473,8 @@ export function RegionInspectorCard({
               }}
               className="flex min-h-11 items-center justify-center gap-1 bg-accent px-2 font-mono text-xs font-bold uppercase text-white hover:bg-accent-hover disabled:bg-panel disabled:text-muted"
             >
-              <Icon icon={action === "save" ? "eos-icons:loading" : "solar:diskette-linear"} />
-              Save
+              <Icon icon={isSaving ? "eos-icons:loading" : "solar:diskette-linear"} className={isSaving ? "animate-spin" : ""} />
+              {isSaving ? "Saving…" : "Save"}
             </button>
             <button
               type="button"

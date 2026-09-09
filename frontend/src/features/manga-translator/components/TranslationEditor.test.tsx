@@ -519,4 +519,234 @@ describe("TranslationEditor", () => {
     expect(autoFitCheckbox.checked).toBe(true);
     expect(screen.getByLabelText("Max Size")).toBeInTheDocument();
   });
+
+  it("auto-saves translation change after debounce timeout", async () => {
+    renderEditor();
+    const user = userEvent.setup();
+    await selectRegion(user);
+
+    const input = screen.getByLabelText("Thai translation");
+    fireEvent.change(input, { target: { value: "auto-saved translation" } });
+
+    expect(api.patchRegion).not.toHaveBeenCalled();
+    expect(screen.getByText("Unsaved")).toBeInTheDocument();
+
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 750));
+    });
+
+    await waitFor(() =>
+      expect(api.patchRegion).toHaveBeenCalledWith("job-1", "region-1", {
+        translated_text: "auto-saved translation",
+      }),
+    );
+    await waitFor(() => expect(screen.getByText("Saved")).toBeInTheDocument());
+    expect(screen.getByText("All changes saved")).toBeInTheDocument();
+  });
+
+  it("debounces rapid inputs into single auto-save call", async () => {
+    renderEditor();
+    const user = userEvent.setup();
+    await selectRegion(user);
+
+    const input = screen.getByLabelText("Thai translation");
+    fireEvent.change(input, { target: { value: "a" } });
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 200));
+    });
+    fireEvent.change(input, { target: { value: "ab" } });
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 200));
+    });
+    fireEvent.change(input, { target: { value: "abc" } });
+
+    expect(api.patchRegion).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 750));
+    });
+
+    await waitFor(() => expect(api.patchRegion).toHaveBeenCalledOnce());
+    expect(api.patchRegion).toHaveBeenCalledWith("job-1", "region-1", {
+      translated_text: "abc",
+    });
+  });
+
+  it("auto-saves source text change after debounce timeout", async () => {
+    renderEditor();
+    const user = userEvent.setup();
+    await selectRegion(user);
+
+    const input = screen.getByLabelText("Source text");
+    fireEvent.change(input, { target: { value: "auto-saved source" } });
+
+    expect(api.patchRegion).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 750));
+    });
+
+    await waitFor(() =>
+      expect(api.patchRegion).toHaveBeenCalledWith("job-1", "region-1", {
+        text: "auto-saved source",
+      }),
+    );
+    await waitFor(() => expect(screen.getByText("Saved")).toBeInTheDocument());
+  });
+
+  it("auto-saves typesetting change after debounce timeout", async () => {
+    renderEditor();
+    const user = userEvent.setup();
+    await selectRegion(user);
+
+    await user.click(screen.getByRole("button", { name: "Increase font size" }));
+    expect(api.patchRegion).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 750));
+    });
+
+    await waitFor(() =>
+      expect(api.patchRegion).toHaveBeenCalledWith(
+        "job-1",
+        "region-1",
+        expect.objectContaining({
+          typesetting: expect.objectContaining({ font_size: 21, auto_fit: false }),
+        }),
+      ),
+    );
+    await waitFor(() => expect(screen.getByText("Saved")).toBeInTheDocument());
+  });
+
+  it("flushes pending auto-save immediately when switching region selection", async () => {
+    const user = userEvent.setup();
+    const block2: BlockItem = {
+      id: "region-2",
+      box: { x: 0.5, y: 0.5, width: 0.2, height: 0.1 },
+      source: "detected",
+      text: "second source",
+      translated_text: "second translation",
+    };
+    render(
+      <TranslationEditor
+        item={{ ...item, blocks: [block, block2] }}
+        onClose={vi.fn()}
+        onUpdate={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByText("Region 1"));
+    const input = screen.getByLabelText("Thai translation");
+    fireEvent.change(input, { target: { value: "draft 1" } });
+
+    expect(api.patchRegion).not.toHaveBeenCalled();
+
+    // Switch selection to Region 2 without waiting for debounce timeout
+    await user.click(screen.getByText("Region 2"));
+
+    // Region 1 must be immediately flushed
+    await waitFor(() =>
+      expect(api.patchRegion).toHaveBeenCalledWith("job-1", "region-1", {
+        translated_text: "draft 1",
+      }),
+    );
+  });
+
+  it("manual save button immediately saves and cancels pending debounce", async () => {
+    renderEditor();
+    const user = userEvent.setup();
+    await selectRegion(user);
+
+    const input = screen.getByLabelText("Thai translation");
+    fireEvent.change(input, { target: { value: "manual save draft" } });
+
+    const saveBtn = screen.getByRole("button", { name: "Save" });
+    await user.click(saveBtn);
+
+    await waitFor(() =>
+      expect(api.patchRegion).toHaveBeenCalledWith("job-1", "region-1", {
+        translated_text: "manual save draft",
+      }),
+    );
+
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 800));
+    });
+    expect(api.patchRegion).toHaveBeenCalledOnce();
+  });
+
+  it("flushes pending auto-save immediately on Exit button click before closing", async () => {
+    const onClose = vi.fn();
+    const onUpdate = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <TranslationEditor
+        item={{ ...item, blocks: item.blocks?.map(region => ({ ...region })) }}
+        onClose={onClose}
+        onUpdate={onUpdate}
+      />,
+    );
+    await selectRegion(user);
+
+    const input = screen.getByLabelText("Thai translation");
+    fireEvent.change(input, { target: { value: "exit flush text" } });
+
+    expect(api.patchRegion).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Exit" }));
+
+    await waitFor(() =>
+      expect(api.patchRegion).toHaveBeenCalledWith("job-1", "region-1", {
+        translated_text: "exit flush text",
+      }),
+    );
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("flushes pending auto-save before page navigation", async () => {
+    const user = userEvent.setup();
+    const onNavigatePage = vi.fn().mockResolvedValue(undefined);
+    const page1: ProcessedManga = { id: "job-1", filename: "page1.png", originalUrl: "/uploads/page1.png", status: "completed", progress: 100 };
+    const page2: ProcessedManga = { id: "job-2", filename: "page2.png", originalUrl: "/uploads/page2.png", status: "completed", progress: 100 };
+    render(
+      <TranslationEditor
+        item={{ ...item, blocks: item.blocks?.map(region => ({ ...region })) }}
+        onClose={vi.fn()}
+        onUpdate={vi.fn()}
+        pages={[page1, page2]}
+        onNavigatePage={onNavigatePage}
+      />,
+    );
+    await selectRegion(user);
+
+    const input = screen.getByLabelText("Thai translation");
+    fireEvent.change(input, { target: { value: "page nav text" } });
+
+    expect(api.patchRegion).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Next >" }));
+
+    await waitFor(() =>
+      expect(api.patchRegion).toHaveBeenCalledWith("job-1", "region-1", {
+        translated_text: "page nav text",
+      }),
+    );
+    expect(onNavigatePage).toHaveBeenCalledWith("job-2");
+  });
+
+  it("displays error indicator on card when auto-save fails", async () => {
+    api.patchRegion.mockRejectedValueOnce(new Error("Network disconnect"));
+    renderEditor();
+    const user = userEvent.setup();
+    await selectRegion(user);
+
+    const input = screen.getByLabelText("Thai translation");
+    fireEvent.change(input, { target: { value: "failing text" } });
+
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 750));
+    });
+
+    await waitFor(() => expect(screen.getByText("Save failed")).toBeInTheDocument());
+  });
 });
