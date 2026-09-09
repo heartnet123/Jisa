@@ -465,7 +465,11 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
     if (inFlightPromisesRef.current[blockId]) {
       if (manual) setActiveRegionAction({ blockId, action: 'save' });
       needsResaveRef.current.add(blockId);
-      await inFlightPromisesRef.current[blockId];
+      try {
+        await inFlightPromisesRef.current[blockId];
+      } finally {
+        if (manual) setActiveRegionAction(null);
+      }
       return;
     }
 
@@ -500,6 +504,12 @@ export const TranslationEditor: React.FC<TranslationEditorProps> = ({
 
   const scheduleAutoSave = (blockId: string) => {
     clearSavedTimer(blockId);
+    setSaveStatusMap(prev => {
+      if (prev[blockId] !== 'error') return prev;
+      const next = { ...prev };
+      delete next[blockId];
+      return next;
+    });
 
     if (autoSaveTimersRef.current[blockId]) {
       clearTimeout(autoSaveTimersRef.current[blockId]);

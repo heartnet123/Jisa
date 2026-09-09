@@ -706,8 +706,8 @@ describe("TranslationEditor", () => {
   it("flushes pending auto-save before page navigation", async () => {
     const user = userEvent.setup();
     const onNavigatePage = vi.fn().mockResolvedValue(undefined);
-    const page1 = { id: "job-1", filename: "page1.png" };
-    const page2 = { id: "job-2", filename: "page2.png" };
+    const page1: ProcessedManga = { id: "job-1", filename: "page1.png", originalUrl: "/uploads/page1.png", status: "completed", progress: 100 };
+    const page2: ProcessedManga = { id: "job-2", filename: "page2.png", originalUrl: "/uploads/page2.png", status: "completed", progress: 100 };
     render(
       <TranslationEditor
         item={{ ...item, blocks: item.blocks?.map(region => ({ ...region })) }}
